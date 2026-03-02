@@ -737,14 +737,13 @@ with tab1:
 
         obs_html = ""
         for obs in commentary:
-            obs_html += f"""
-            <div style="display:flex;gap:14px;align-items:flex-start;
-                        padding:11px 0;border-bottom:1px solid rgba(45,74,107,0.5)">
-              <span style="font-size:14px;color:{obs['color']};font-weight:700;
-                           min-width:20px;text-align:center;margin-top:1px;
-                           font-family:'JetBrains Mono',monospace">{obs['icon']}</span>
-              <p style="margin:0;font-size:12.5px;color:#C9D1D9;line-height:1.6">{obs['text']}</p>
-            </div>"""
+            c, ic, tx = obs["color"], obs["icon"], obs["text"]
+            obs_html += (
+                f'<div style="display:flex;gap:14px;align-items:flex-start;padding:11px 0;border-bottom:1px solid rgba(45,74,107,0.5)">'
+                f'<span style="font-size:14px;color:{c};font-weight:700;min-width:20px;text-align:center;margin-top:2px;font-family:monospace">{ic}</span>'
+                f'<p style="margin:0;font-size:12.5px;color:#C9D1D9;line-height:1.65">{tx}</p>'
+                f'</div>'
+            )
 
         st.markdown(f"""
         <div style="background:#141F2E;border:1px solid #2D4A6B;border-top:2px solid #F59E0B;

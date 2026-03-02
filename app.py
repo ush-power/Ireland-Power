@@ -44,13 +44,19 @@ html, body, .stApp {
 }
 .stApp { background: #0E1117 !important; }
 
-/* ── Hide Streamlit chrome ── */
-#MainMenu, footer, header,
-.stDeployButton,
-[data-testid="stToolbar"],
-[data-testid="stDecoration"] {
-    display: none !important;
-    visibility: hidden !important;
+/* ── Hide Streamlit chrome (be specific — do NOT hide header as it holds the sidebar toggle) ── */
+#MainMenu { visibility: hidden !important; }
+footer { visibility: hidden !important; }
+.stDeployButton { display: none !important; }
+[data-testid="stToolbar"] { display: none !important; }
+[data-testid="stDecoration"] { display: none !important; }
+[data-testid="stStatusWidget"] { display: none !important; }
+
+/* ── Lock sidebar open ── */
+[data-testid="stSidebar"] {
+    display: block !important;
+    visibility: visible !important;
+    transform: translateX(0) !important;
 }
 
 /* ── Main content padding ── */

@@ -1,0 +1,37 @@
+name: Daily SEMO Data Update
+
+on:
+  schedule:
+    # Runs every day at 07:00 UTC (8am Irish winter time, 8am summer time)
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+    # Also allows you to trigger it manually from the GitHub Actions tab
+
+jobs:
+  update-semo-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r scraper/requirements.txt
+
+      - name: Write BigQuery credentials to file
+        run: echo '${{ secrets.GCP_SERVICE_ACCOUNT }}' > /tmp/service_account.json
+
+      - name: Run daily SEMO update
+        run: python scraper/daily_update.py
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/service_account.json
+
+      - name: Clean up credentials
+        if: always()
+        run: rm -f /tmp/service_account.json

@@ -248,6 +248,116 @@ def count_niv_flips(series) -> int:
     return int(np.sum(s[1:] != s[:-1])) if len(s) > 1 else 0
 
 
+def generate_commentary(imb_df: pd.DataFrame, dam_df: pd.DataFrame = None) -> list:
+    """Return list of {icon, color, text} analyst observations based on the selected data."""
+    out = []
+    prices = imb_df["ImbalancePrice"].dropna()
+    niv    = imb_df["NetImbalanceVolume"].dropna()
+
+    if prices.empty:
+        return [{"icon": "⚠", "color": "#F59E0B",
+                 "text": "Insufficient data to generate commentary for the selected period. Try widening the date range."}]
+
+    avg  = prices.mean()
+    std  = prices.std()
+    peak = prices.max()
+    low  = prices.min()
+
+    # 1 — System direction bias
+    pct_short = (niv < 0).mean() * 100
+    pct_long  = 100 - pct_short
+    if pct_short > 65:
+        out.append({"icon": "↘", "color": "#FF4B4B",
+                    "text": (f"The system was short in {pct_short:.0f}% of settlement periods — a persistent generation "
+                             f"deficit. Parties with uncontracted positions were exposed to SBP for the majority of the "
+                             f"period. This is a costly environment for any generator running below contracted output.")})
+    elif pct_short < 35:
+        out.append({"icon": "↗", "color": "#00D4FF",
+                    "text": (f"The system was long in {pct_long:.0f}% of settlement periods, consistent with "
+                             f"high renewable output or subdued demand. SSP applied for most intervals. Parties "
+                             f"holding excess Day Ahead positions would have received a lower-than-expected settlement price.")})
+    else:
+        out.append({"icon": "⇄", "color": "#F59E0B",
+                    "text": (f"Mixed system direction: {pct_short:.0f}% short / {pct_long:.0f}% long. "
+                             f"The system alternated frequently between SBP and SSP regimes — a challenging environment "
+                             f"for imbalance management, with no clear directional bias to position against.")})
+
+    # 2 — Price volatility
+    cv = std / avg if avg > 0 else 0
+    if cv > 0.9:
+        out.append({"icon": "⚡", "color": "#FF4B4B",
+                    "text": (f"High price volatility: σ €{std:.2f}/MWh against a period mean of €{avg:.2f}/MWh "
+                             f"(coefficient of variation {cv:.0%}). Intraday price swings are severe — "
+                             f"likely reflecting tight wind-to-load margins or constrained thermal dispatch. "
+                             f"Imbalance exposure carries significant cost risk in this environment.")})
+    elif cv > 0.45:
+        out.append({"icon": "〜", "color": "#F59E0B",
+                    "text": (f"Moderate price dispersion: σ €{std:.2f}/MWh (CV {cv:.0%}). "
+                             f"Some meaningful intraday spikes are present. Active positions should monitor "
+                             f"imbalance exposure around morning and evening demand peaks.")})
+    else:
+        out.append({"icon": "≈", "color": "#00CC33",
+                    "text": (f"Contained price dispersion: σ €{std:.2f}/MWh (CV {cv:.0%}). "
+                             f"Stable dispatch conditions with predictable imbalance cost. "
+                             f"Spread between peak and baseload is modest for this period.")})
+
+    # 3 — Price spike analysis
+    peak_idx  = prices.idxmax()
+    peak_time = imb_df.loc[peak_idx, "StartTime"]
+    peak_niv  = imb_df.loc[peak_idx, "NetImbalanceVolume"]
+    ratio     = peak / avg if avg > 0 else 1
+    if ratio > 3.0:
+        niv_desc = "system was short (SBP event)" if peak_niv < 0 else "system was long (high SSP)"
+        out.append({"icon": "▲", "color": "#FF4B4B",
+                    "text": (f"Notable price spike: €{peak:.2f}/MWh at {peak_time.strftime('%d %b, %H:%M')} — "
+                             f"{ratio:.1f}× the period average. The {niv_desc}. "
+                             f"Spikes of this magnitude typically reflect scarcity pricing, a major unit outage, "
+                             f"or a rapid drop in available renewable generation.")})
+    elif ratio > 1.8:
+        out.append({"icon": "△", "color": "#F59E0B",
+                    "text": (f"Moderate price spike of €{peak:.2f}/MWh recorded at {peak_time.strftime('%d %b, %H:%M')} "
+                             f"({ratio:.1f}× period average). Peak pricing is concentrated; "
+                             f"well-timed positions around this window would have seen outsized settlement value.")})
+
+    # 4 — NIV flip rate (system uncertainty)
+    days  = max((imb_df["StartTime"].max() - imb_df["StartTime"].min()).total_seconds() / 86400, 1)
+    flips = count_niv_flips(imb_df["NetImbalanceVolume"])
+    fpd   = flips / days
+    if fpd > 25:
+        out.append({"icon": "⇅", "color": "#F59E0B",
+                    "text": (f"High system instability: ~{fpd:.0f} NIV direction changes per day on average. "
+                             f"Frequent SBP↔SSP transitions indicate volatile renewable dispatch or rapidly "
+                             f"shifting demand patterns — increasing uncertainty for any party managing real-time imbalance.")})
+    elif fpd > 12:
+        out.append({"icon": "⇅", "color": "#94A3B8",
+                    "text": (f"Moderate NIV flip rate: ~{fpd:.0f} direction changes per day. "
+                             f"The system changed direction regularly, consistent with variable wind and mixed "
+                             f"thermal/renewable dispatch across the period.")})
+
+    # 5 — DAM vs imbalance spread (if DAM data available)
+    if dam_df is not None and not dam_df.empty:
+        dam_avg = dam_df["Price"].mean()
+        spread  = avg - dam_avg
+        if spread > 15:
+            out.append({"icon": "↑", "color": "#FF4B4B",
+                        "text": (f"Imbalance averaged €{spread:.2f}/MWh above the Day Ahead Market "
+                                 f"(DAM: €{dam_avg:.2f} vs Imbalance: €{avg:.2f}/MWh). "
+                                 f"Parties who were long in the DA market and short in real-time faced meaningful "
+                                 f"value erosion. Forward procurement was cheaper than real-time settlement for this period.")})
+        elif spread < -15:
+            out.append({"icon": "↓", "color": "#00CC33",
+                        "text": (f"Imbalance averaged €{abs(spread):.2f}/MWh below the Day Ahead Market "
+                                 f"(DAM: €{dam_avg:.2f} vs Imbalance: €{avg:.2f}/MWh). "
+                                 f"Excess DA positions settled at a premium to real-time — "
+                                 f"the imbalance market was cheaper than forward procurement for this window.")})
+        else:
+            out.append({"icon": "≈", "color": "#94A3B8",
+                        "text": (f"Imbalance and DAM prices tracked closely (€{abs(spread):.2f}/MWh average spread). "
+                                 f"No significant arbitrage opportunity between day-ahead and real-time markets for this period.")})
+
+    return out
+
+
 # Shared Plotly layout for all charts
 def dark_layout(title: str, height: int = 420) -> dict:
     axis = dict(
@@ -434,6 +544,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     with st.spinner("Loading…"):
         imb_df = fetch_imbalance(start_str, end_str)
+        dam_df = fetch_dam(start_str, end_str)
 
     if imb_df.empty:
         st.warning("No imbalance data for the selected period.")
@@ -620,6 +731,45 @@ with tab1:
                     "zeroline": True, "zerolinecolor": "#333"},
         )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+        # ── Bahadir's Brain — Analyst Commentary ──
+        commentary = generate_commentary(imb_df, dam_df if not dam_df.empty else None)
+
+        obs_html = ""
+        for obs in commentary:
+            obs_html += f"""
+            <div style="display:flex;gap:14px;align-items:flex-start;
+                        padding:11px 0;border-bottom:1px solid rgba(45,74,107,0.5)">
+              <span style="font-size:14px;color:{obs['color']};font-weight:700;
+                           min-width:20px;text-align:center;margin-top:1px;
+                           font-family:'JetBrains Mono',monospace">{obs['icon']}</span>
+              <p style="margin:0;font-size:12.5px;color:#C9D1D9;line-height:1.6">{obs['text']}</p>
+            </div>"""
+
+        st.markdown(f"""
+        <div style="background:#141F2E;border:1px solid #2D4A6B;border-top:2px solid #F59E0B;
+                    border-radius:10px;padding:18px 22px;margin:18px 0">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+            <span style="font-size:22px;line-height:1">🧠</span>
+            <div style="flex:1">
+              <p style="margin:0;font-size:10px;font-weight:600;color:#F59E0B;
+                        text-transform:uppercase;letter-spacing:0.12em">Commercial Analysis</p>
+              <p style="margin:2px 0 0;font-size:14px;font-weight:700;color:#E6EDF3">
+                Bahadir's Brain</p>
+            </div>
+            <div style="text-align:right">
+              <p style="margin:0;font-size:10px;color:#8B949E;
+                        font-family:'JetBrains Mono',monospace">
+                {date_from.strftime('%d %b')} → {date_to.strftime('%d %b %Y')} · {days_sel}d</p>
+              <p style="margin:3px 0 0;font-size:10px;color:#444D56">
+                Based on {len(imb_df):,} settlement intervals</p>
+            </div>
+          </div>
+          {obs_html}
+          <p style="margin:12px 0 0;font-size:10px;color:#444D56;font-style:italic">
+            Rule-based analysis. Observations update automatically with the selected date range.</p>
+        </div>
+        """, unsafe_allow_html=True)
 
         # ── Latest readings data grid ──
         st.markdown("<p style='font-size:11px;font-weight:600;color:#8B949E;"

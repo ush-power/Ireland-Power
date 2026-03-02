@@ -572,16 +572,16 @@ with tab1:
         latest_niv   = latest["NetImbalanceVolume"]
         state_label, state_color, dot_cls = system_state(latest_niv)
 
-        # 24h comparison
-        cutoff = imb_df["StartTime"].max() - pd.Timedelta(hours=24)
-        prev_avg = imb_df[imb_df["StartTime"] <= cutoff]["ImbalancePrice"].mean()
-        if prev_avg and prev_avg > 0:
-            chg     = latest_price - prev_avg
-            chg_pct = (chg / prev_avg) * 100
-            chg_col = "#FF4B4B" if chg > 0 else "#00FF41"
-            chg_str = f"{'+' if chg>0 else ''}€{chg:.2f} ({'+' if chg_pct>0 else ''}{chg_pct:.1f}%)"
+        # 24h high / low / range (last 24h of the selected period)
+        cutoff_24h = imb_df["StartTime"].max() - pd.Timedelta(hours=24)
+        last_24h   = imb_df[imb_df["StartTime"] >= cutoff_24h]["ImbalancePrice"].dropna()
+        if not last_24h.empty:
+            h24_high  = last_24h.max()
+            h24_low   = last_24h.min()
+            h24_range = h24_high - h24_low
+            h24_avg   = last_24h.mean()
         else:
-            chg_str, chg_col = "—", "#8B949E"
+            h24_high = h24_low = h24_range = h24_avg = None
 
         peak = imb_df["ImbalancePrice"].max()
         avg  = imb_df["ImbalancePrice"].mean()
@@ -596,15 +596,19 @@ with tab1:
         tip_price = ("The most recent imbalance settlement price in the dataset, in Euro per MWh. "
                      "Data is updated once daily — this is not a real-time feed. "
                      "SBP applies when the system is short (needs more power); SSP applies when long (surplus).")
-        tip_24h   = ("Compares the latest imbalance price to the average price over the past 24 hours. "
-                     "A positive change means conditions are more expensive than recent history; negative means cheaper.")
+        tip_24h   = ("The spread between the highest and lowest imbalance price in the last 24 hours of the selected period. "
+                     "A wide range signals high price volatility — relevant when stress-testing budget assumptions or "
+                     "assessing the risk of forecast errors coinciding with price extremes.")
         tip_peak  = ("The highest imbalance price recorded during the selected date range. "
                      "Price spikes indicate acute periods of system stress, often driven by low wind or unexpected plant outages.")
         tip_avg   = ("The mean imbalance price across all 5-minute intervals in the selected period. "
                      "A core benchmark for overall market conditions and portfolio cost assessment.")
-        tip_niv   = ("Net Imbalance Volume: the gap between generation and demand across the system. "
-                     "Positive (green) = system oversupplied — generators are long. "
-                     "Negative (red) = system undersupplied — generators are short and must buy at SBP.")
+        tip_niv   = ("Net Imbalance Volume: the gap between total generation and total demand across the Irish system. "
+                     "LONG (positive, green): the system has more generation than demand — typically high wind or low load. "
+                     "SSP (System Sell Price) applies; surplus generators receive a discounted settlement price. "
+                     "SHORT (negative, red): demand exceeds available generation — the system is undersupplied. "
+                     "SBP (System Buy Price) applies; any generator underperforming against its nominated output "
+                     "must pay a premium to cover its shortfall. Short periods are the more costly imbalance regime.")
 
         st.markdown(f"""
         <style>
@@ -634,16 +638,14 @@ with tab1:
           </div>
 
           <div style="flex:1;min-width:140px;background:#1E2D42;
-                      border:1px solid #2D4A6B;border-top:2px solid #30363D;
+                      border:1px solid #2D4A6B;border-top:2px solid #94A3B8;
                       border-radius:10px;padding:14px 18px">
             <div style="display:flex;align-items:center;margin-bottom:5px">
               <span style="font-size:10px;font-weight:600;color:#8B949E;
-                           text-transform:uppercase;letter-spacing:0.1em">24H Change</span>
+                           text-transform:uppercase;letter-spacing:0.1em">24H Price Range</span>
               {info_badge(tip_24h)}
             </div>
-            <p style="margin:0;font-size:22px;font-weight:700;color:{chg_col};
-                      font-family:'JetBrains Mono',monospace">{chg_str}</p>
-            <p style="margin:5px 0 0;font-size:10px;color:#8B949E">vs 24h avg</p>
+            {'<p style="margin:0;font-size:22px;font-weight:700;color:#E6EDF3;font-family:JetBrains Mono,monospace">€' + f"{h24_range:.2f}" + '</p><p style="margin:5px 0 0;font-size:10px;color:#8B949E;font-family:JetBrains Mono,monospace"><span style=\'color:#FF4B4B\'>H €' + f"{h24_high:.2f}" + '</span>  ·  <span style=\'color:#00CC33\'>L €' + f"{h24_low:.2f}" + '</span></p>' if h24_range is not None else '<p style="margin:0;font-size:22px;font-weight:700;color:#8B949E">—</p><p style="margin:5px 0 0;font-size:10px;color:#8B949E">No data</p>'}
           </div>
 
           <div style="flex:1;min-width:140px;background:#1E2D42;

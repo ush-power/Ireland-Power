@@ -86,27 +86,20 @@ with st.sidebar:
     st.divider()
 
     st.subheader("Select Date Range")
-    yesterday = date.today() - timedelta(days=1)
+    yesterday  = date.today() - timedelta(days=1)
+    data_start = date(2025, 1, 1)   # Earliest date in BigQuery
 
-    date_from = st.date_input(
-        "From",
-        value=yesterday - timedelta(days=6),
+    date_from, date_to = st.slider(
+        "Date range",
+        min_value=data_start,
         max_value=yesterday,
-        key="date_from",
+        value=(yesterday - timedelta(days=6), yesterday),
+        format="DD MMM YYYY",
+        label_visibility="collapsed",
     )
-    date_to = st.date_input(
-        "To",
-        value=yesterday,
-        max_value=yesterday,
-        key="date_to",
-    )
-
-    if date_from > date_to:
-        st.error("'From' date must be before 'To' date.")
-        st.stop()
 
     days_selected = (date_to - date_from).days + 1
-    st.caption(f"**{days_selected}** day(s) selected")
+    st.caption(f"**{date_from.strftime('%d %b %Y')}** → **{date_to.strftime('%d %b %Y')}**  ({days_selected} days)")
     st.divider()
     st.caption("Query results cached for 1 hour.")
     st.caption("Data updated daily via automated pipeline.")

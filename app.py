@@ -458,7 +458,29 @@ with tab1:
         avg  = imb_df["ImbalancePrice"].mean()
 
         # ── KPI Ribbon ──
+        def info_badge(tip: str) -> str:
+            return (f'<span title="{tip}" style="cursor:help;font-size:9px;font-weight:700;'
+                    f'color:#8B949E;border:1px solid #3D5A78;border-radius:50%;'
+                    f'min-width:14px;height:14px;display:inline-flex;align-items:center;'
+                    f'justify-content:center;margin-left:6px;flex-shrink:0;line-height:1">?</span>')
+
+        tip_price = ("The real-time price paid or received to correct electricity supply/demand imbalances, "
+                     "in Euro per MWh. High prices signal system stress or scarcity. "
+                     "SBP applies when the system is short (needs more power); SSP applies when long (surplus).")
+        tip_24h   = ("Compares the latest imbalance price to the average price over the past 24 hours. "
+                     "A positive change means conditions are more expensive than recent history; negative means cheaper.")
+        tip_peak  = ("The highest imbalance price recorded during the selected date range. "
+                     "Price spikes indicate acute periods of system stress, often driven by low wind or unexpected plant outages.")
+        tip_avg   = ("The mean imbalance price across all 5-minute intervals in the selected period. "
+                     "A core benchmark for overall market conditions and portfolio cost assessment.")
+        tip_niv   = ("Net Imbalance Volume: the gap between generation and demand across the system. "
+                     "Positive (green) = system oversupplied — generators are long. "
+                     "Negative (red) = system undersupplied — generators are short and must buy at SBP.")
+
         st.markdown(f"""
+        <style>
+        [title] {{ cursor: help; }}
+        </style>
         <div style="display:flex;gap:10px;margin-bottom:18px;flex-wrap:wrap">
 
           <div style="flex:1.6;min-width:200px;background:#1E2D42;
@@ -468,6 +490,7 @@ with tab1:
               <span class="{dot_cls}"></span>
               <span style="font-size:10px;font-weight:600;color:#8B949E;
                            text-transform:uppercase;letter-spacing:0.1em">Live Imbalance Price</span>
+              {info_badge(tip_price)}
             </div>
             <div style="font-size:34px;font-weight:700;color:{state_color};
                         font-family:'JetBrains Mono',monospace;line-height:1">
@@ -480,8 +503,11 @@ with tab1:
           <div style="flex:1;min-width:140px;background:#1E2D42;
                       border:1px solid #2D4A6B;border-top:2px solid #30363D;
                       border-radius:10px;padding:14px 18px">
-            <p style="margin:0 0 5px;font-size:10px;font-weight:600;color:#8B949E;
-                      text-transform:uppercase;letter-spacing:0.1em">24H Change</p>
+            <div style="display:flex;align-items:center;margin-bottom:5px">
+              <span style="font-size:10px;font-weight:600;color:#8B949E;
+                           text-transform:uppercase;letter-spacing:0.1em">24H Change</span>
+              {info_badge(tip_24h)}
+            </div>
             <p style="margin:0;font-size:22px;font-weight:700;color:{chg_col};
                       font-family:'JetBrains Mono',monospace">{chg_str}</p>
             <p style="margin:5px 0 0;font-size:10px;color:#8B949E">vs 24h avg</p>
@@ -490,8 +516,11 @@ with tab1:
           <div style="flex:1;min-width:140px;background:#1E2D42;
                       border:1px solid #2D4A6B;border-top:2px solid #FF4B4B;
                       border-radius:10px;padding:14px 18px">
-            <p style="margin:0 0 5px;font-size:10px;font-weight:600;color:#8B949E;
-                      text-transform:uppercase;letter-spacing:0.1em">Period Peak</p>
+            <div style="display:flex;align-items:center;margin-bottom:5px">
+              <span style="font-size:10px;font-weight:600;color:#8B949E;
+                           text-transform:uppercase;letter-spacing:0.1em">Period Peak</span>
+              {info_badge(tip_peak)}
+            </div>
             <p style="margin:0;font-size:22px;font-weight:700;color:#FF4B4B;
                       font-family:'JetBrains Mono',monospace">€{peak:.2f}</p>
             <p style="margin:5px 0 0;font-size:10px;color:#8B949E">EUR / MWh</p>
@@ -500,19 +529,25 @@ with tab1:
           <div style="flex:1;min-width:140px;background:#1E2D42;
                       border:1px solid #2D4A6B;border-top:2px solid #00D4FF;
                       border-radius:10px;padding:14px 18px">
-            <p style="margin:0 0 5px;font-size:10px;font-weight:600;color:#8B949E;
-                      text-transform:uppercase;letter-spacing:0.1em">Period Average</p>
+            <div style="display:flex;align-items:center;margin-bottom:5px">
+              <span style="font-size:10px;font-weight:600;color:#8B949E;
+                           text-transform:uppercase;letter-spacing:0.1em">Period Average</span>
+              {info_badge(tip_avg)}
+            </div>
             <p style="margin:0;font-size:22px;font-weight:700;color:#00D4FF;
                       font-family:'JetBrains Mono',monospace">€{avg:.2f}</p>
             <p style="margin:5px 0 0;font-size:10px;color:#8B949E">EUR / MWh</p>
           </div>
 
           <div style="flex:1;min-width:140px;background:#1E2D42;
-                      border:1px solid #2D4A6B;border-top:2px solid #00FF41;
+                      border:1px solid #2D4A6B;border-top:2px solid #00CC33;
                       border-radius:10px;padding:14px 18px">
-            <p style="margin:0 0 5px;font-size:10px;font-weight:600;color:#8B949E;
-                      text-transform:uppercase;letter-spacing:0.1em">Latest NIV</p>
-            <p style="margin:0;font-size:22px;font-weight:700;color:#00FF41;
+            <div style="display:flex;align-items:center;margin-bottom:5px">
+              <span style="font-size:10px;font-weight:600;color:#8B949E;
+                           text-transform:uppercase;letter-spacing:0.1em">Latest NIV</span>
+              {info_badge(tip_niv)}
+            </div>
+            <p style="margin:0;font-size:22px;font-weight:700;color:#00CC33;
                       font-family:'JetBrains Mono',monospace">{latest_niv:+.1f}</p>
             <p style="margin:5px 0 0;font-size:10px;color:#8B949E">MWh</p>
           </div>
@@ -544,11 +579,12 @@ with tab1:
             ), row=1, col=1)
 
         vol_colors = imb_df["NetImbalanceVolume"].apply(
-            lambda v: "#00FF41" if v >= 0 else "#FF4B4B"
-        )
+            lambda v: "#00CC33" if v >= 0 else "#FF4B4B"
+        ).tolist()
         fig.add_trace(go.Bar(
             x=imb_df["StartTime"], y=imb_df["NetImbalanceVolume"],
-            name="NIV", marker_color=vol_colors,
+            name="NIV",
+            marker=dict(color=vol_colors, opacity=0.9, line=dict(width=0)),
             hovertemplate="<b>%{x|%d %b %H:%M}</b><br>%{y:+.1f} MWh<extra>NIV</extra>",
         ), row=2, col=1)
 

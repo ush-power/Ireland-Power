@@ -46,7 +46,7 @@ def fetch_imbalance(start: str, end: str) -> pd.DataFrame:
     """
     df = get_bq_client().query(query).to_dataframe()
     # Strip timezone so Plotly renders cleanly
-    df["StartTime"] = pd.to_datetime(df["StartTime"]).dt.tz_convert(None)
+    df["StartTime"] = pd.to_datetime(df["StartTime"])
     return df
 
 
@@ -62,7 +62,7 @@ def fetch_dam(start: str, end: str) -> pd.DataFrame:
         ORDER BY StartTime
     """
     df = get_bq_client().query(query).to_dataframe()
-    df["StartTime"] = pd.to_datetime(df["StartTime"]).dt.tz_convert(None)
+    df["StartTime"] = pd.to_datetime(df["StartTime"])
     return df
 
 

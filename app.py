@@ -249,7 +249,7 @@ def count_niv_flips(series) -> int:
 
 
 def generate_commentary(imb_df: pd.DataFrame, dam_df: pd.DataFrame = None) -> list:
-    """Return list of {icon, color, text} analyst observations based on the selected data."""
+    """Return list of {icon, color, text} analyst observations from a renewable developer perspective."""
     out = []
     prices = imb_df["ImbalancePrice"].dropna()
     niv    = imb_df["NetImbalanceVolume"].dropna()
@@ -261,99 +261,117 @@ def generate_commentary(imb_df: pd.DataFrame, dam_df: pd.DataFrame = None) -> li
     avg  = prices.mean()
     std  = prices.std()
     peak = prices.max()
-    low  = prices.min()
 
-    # 1 — System direction bias
+    # 1 — System direction: what does it mean for asset revenue & imbalance exposure?
     pct_short = (niv < 0).mean() * 100
     pct_long  = 100 - pct_short
     if pct_short > 65:
         out.append({"icon": "↘", "color": "#FF4B4B",
-                    "text": (f"The system was short in {pct_short:.0f}% of settlement periods — a persistent generation "
-                             f"deficit. Parties with uncontracted positions were exposed to SBP for the majority of the "
-                             f"period. This is a costly environment for any generator running below contracted output.")})
+                    "text": (f"The system was short in {pct_short:.0f}% of settlement intervals, indicating "
+                             f"persistent demand exceeding available generation across the market. For Highfield's "
+                             f"renewable assets, any underperformance against forecast during this period would "
+                             f"attract SBP settlement — the more costly imbalance regime. Budget models should "
+                             f"reflect an above-average imbalance cost assumption for periods with this directional bias.")})
     elif pct_short < 35:
         out.append({"icon": "↗", "color": "#00D4FF",
-                    "text": (f"The system was long in {pct_long:.0f}% of settlement periods, consistent with "
-                             f"high renewable output or subdued demand. SSP applied for most intervals. Parties "
-                             f"holding excess Day Ahead positions would have received a lower-than-expected settlement price.")})
+                    "text": (f"The system was long in {pct_long:.0f}% of settlement intervals, consistent with "
+                             f"high renewable output across the market. Under SSP conditions, any surplus generation "
+                             f"settles at a discounted rate below the Day Ahead price — a key driver of capture price "
+                             f"discount for wind and solar assets. PPA valuations and budget revenue forecasts should "
+                             f"account for the frequency of SSP periods, particularly during high-wind seasons.")})
     else:
         out.append({"icon": "⇄", "color": "#F59E0B",
-                    "text": (f"Mixed system direction: {pct_short:.0f}% short / {pct_long:.0f}% long. "
-                             f"The system alternated frequently between SBP and SSP regimes — a challenging environment "
-                             f"for imbalance management, with no clear directional bias to position against.")})
+                    "text": (f"Mixed system direction: {pct_short:.0f}% short / {pct_long:.0f}% long across the period. "
+                             f"The blend of SBP and SSP regimes makes it difficult to assume a single price bias in "
+                             f"budget modelling. For management account commentary, it is worth separating the "
+                             f"short and long periods to understand what drove imbalance settlement costs in each direction.")})
 
-    # 2 — Price volatility
+    # 2 — Price volatility: impact on budget forecasting and PPA risk premium
     cv = std / avg if avg > 0 else 0
     if cv > 0.9:
         out.append({"icon": "⚡", "color": "#FF4B4B",
                     "text": (f"High price volatility: σ €{std:.2f}/MWh against a period mean of €{avg:.2f}/MWh "
-                             f"(coefficient of variation {cv:.0%}). Intraday price swings are severe — "
-                             f"likely reflecting tight wind-to-load margins or constrained thermal dispatch. "
-                             f"Imbalance exposure carries significant cost risk in this environment.")})
+                             f"(coefficient of variation {cv:.0%}). Large intraday swings create material uncertainty "
+                             f"in imbalance budget forecasting for the portfolio. When pricing PPAs, this level of "
+                             f"volatility typically requires a wider risk margin to be built into the strike price "
+                             f"assumption. Revenue projections for management accounts should use a range rather "
+                             f"than a single point estimate for the imbalance cost component.")})
     elif cv > 0.45:
         out.append({"icon": "〜", "color": "#F59E0B",
-                    "text": (f"Moderate price dispersion: σ €{std:.2f}/MWh (CV {cv:.0%}). "
-                             f"Some meaningful intraday spikes are present. Active positions should monitor "
-                             f"imbalance exposure around morning and evening demand peaks.")})
+                    "text": (f"Moderate price dispersion: σ €{std:.2f}/MWh (CV {cv:.0%}). Some intraday variability "
+                             f"is present, which will affect the accuracy of flat-rate imbalance assumptions in annual "
+                             f"budgets. Consider stress-testing PPA revenue models against the observed spread between "
+                             f"average and peak pricing when preparing management account forecasts.")})
     else:
         out.append({"icon": "≈", "color": "#00CC33",
-                    "text": (f"Contained price dispersion: σ €{std:.2f}/MWh (CV {cv:.0%}). "
-                             f"Stable dispatch conditions with predictable imbalance cost. "
-                             f"Spread between peak and baseload is modest for this period.")})
+                    "text": (f"Contained price dispersion: σ €{std:.2f}/MWh (CV {cv:.0%}). Stable market conditions "
+                             f"support more reliable imbalance cost budgeting for this period. PPA pricing models "
+                             f"built around a mean price assumption are well-supported by the data from this window.")})
 
-    # 3 — Price spike analysis
+    # 3 — Price spike: exposure for forecast errors at peak
     peak_idx  = prices.idxmax()
     peak_time = imb_df.loc[peak_idx, "StartTime"]
     peak_niv  = imb_df.loc[peak_idx, "NetImbalanceVolume"]
     ratio     = peak / avg if avg > 0 else 1
     if ratio > 3.0:
-        niv_desc = "system was short (SBP event)" if peak_niv < 0 else "system was long (high SSP)"
+        regime = "SBP (system short — expensive for any asset underperforming forecast)" if peak_niv < 0 \
+                 else "SSP (system long — revenue suppressed for over-generating assets)"
         out.append({"icon": "▲", "color": "#FF4B4B",
-                    "text": (f"Notable price spike: €{peak:.2f}/MWh at {peak_time.strftime('%d %b, %H:%M')} — "
-                             f"{ratio:.1f}× the period average. The {niv_desc}. "
-                             f"Spikes of this magnitude typically reflect scarcity pricing, a major unit outage, "
-                             f"or a rapid drop in available renewable generation.")})
+                    "text": (f"Significant price spike: €{peak:.2f}/MWh at {peak_time.strftime('%d %b, %H:%M')} — "
+                             f"{ratio:.1f}× the period average. The prevailing regime was {regime}. "
+                             f"Spikes of this magnitude can have an outsized impact on periodic imbalance settlement "
+                             f"if forecast errors coincide with the event. It is worth cross-referencing whether "
+                             f"Highfield assets were generating to forecast during this window.")})
     elif ratio > 1.8:
         out.append({"icon": "△", "color": "#F59E0B",
-                    "text": (f"Moderate price spike of €{peak:.2f}/MWh recorded at {peak_time.strftime('%d %b, %H:%M')} "
-                             f"({ratio:.1f}× period average). Peak pricing is concentrated; "
-                             f"well-timed positions around this window would have seen outsized settlement value.")})
+                    "text": (f"Elevated price spike of €{peak:.2f}/MWh recorded at {peak_time.strftime('%d %b, %H:%M')} "
+                             f"({ratio:.1f}× period average). Concentrated peak pricing of this magnitude can distort "
+                             f"periodic averages used in management account reporting. Flag this event in any "
+                             f"commentary covering this period.")})
 
-    # 4 — NIV flip rate (system uncertainty)
+    # 4 — NIV flip rate: forecast uncertainty and budget risk
     days  = max((imb_df["StartTime"].max() - imb_df["StartTime"].min()).total_seconds() / 86400, 1)
     flips = count_niv_flips(imb_df["NetImbalanceVolume"])
     fpd   = flips / days
     if fpd > 25:
         out.append({"icon": "⇅", "color": "#F59E0B",
                     "text": (f"High system instability: ~{fpd:.0f} NIV direction changes per day on average. "
-                             f"Frequent SBP↔SSP transitions indicate volatile renewable dispatch or rapidly "
-                             f"shifting demand patterns — increasing uncertainty for any party managing real-time imbalance.")})
+                             f"Frequent switching between SBP and SSP regimes increases forecast uncertainty and "
+                             f"makes it harder to predict which imbalance price will apply at any given time. "
+                             f"For budget purposes, a blended imbalance price assumption based on the SBP/SSP split "
+                             f"is more appropriate than using either price alone for this type of period.")})
     elif fpd > 12:
         out.append({"icon": "⇅", "color": "#94A3B8",
-                    "text": (f"Moderate NIV flip rate: ~{fpd:.0f} direction changes per day. "
-                             f"The system changed direction regularly, consistent with variable wind and mixed "
-                             f"thermal/renewable dispatch across the period.")})
+                    "text": (f"Moderate NIV flip rate: ~{fpd:.0f} direction changes per day. Regular direction changes "
+                             f"suggest variable renewable dispatch conditions across the market. Budget models should "
+                             f"assume a mix of SBP and SSP settlement prices rather than a single imbalance price "
+                             f"assumption for periods exhibiting this pattern.")})
 
-    # 5 — DAM vs imbalance spread (if DAM data available)
+    # 5 — DAM vs imbalance spread: PPA basis risk and budget impact
     if dam_df is not None and not dam_df.empty:
         dam_avg = dam_df["Price"].mean()
         spread  = avg - dam_avg
         if spread > 15:
             out.append({"icon": "↑", "color": "#FF4B4B",
-                        "text": (f"Imbalance averaged €{spread:.2f}/MWh above the Day Ahead Market "
-                                 f"(DAM: €{dam_avg:.2f} vs Imbalance: €{avg:.2f}/MWh). "
-                                 f"Parties who were long in the DA market and short in real-time faced meaningful "
-                                 f"value erosion. Forward procurement was cheaper than real-time settlement for this period.")})
+                        "text": (f"Imbalance prices averaged €{spread:.2f}/MWh above the Day Ahead Market "
+                                 f"(DAM: €{dam_avg:.2f} vs Imbalance: €{avg:.2f}/MWh). For PPA structures "
+                                 f"where the reference price is linked to the Day Ahead index, this spread represents "
+                                 f"the basis risk borne by the asset — real-time settlement was materially more "
+                                 f"expensive than the contracted reference. This should be reflected in the risk "
+                                 f"premium component of any upcoming PPA price review.")})
         elif spread < -15:
             out.append({"icon": "↓", "color": "#00CC33",
-                        "text": (f"Imbalance averaged €{abs(spread):.2f}/MWh below the Day Ahead Market "
-                                 f"(DAM: €{dam_avg:.2f} vs Imbalance: €{avg:.2f}/MWh). "
-                                 f"Excess DA positions settled at a premium to real-time — "
-                                 f"the imbalance market was cheaper than forward procurement for this window.")})
+                        "text": (f"Imbalance prices averaged €{abs(spread):.2f}/MWh below the Day Ahead Market "
+                                 f"(DAM: €{dam_avg:.2f} vs Imbalance: €{avg:.2f}/MWh). Real-time settlement was "
+                                 f"cheaper than the day-ahead reference — a favourable outcome for assets with "
+                                 f"DA-linked PPA contracts during this window. Worth noting in management account "
+                                 f"commentary as a period where market conditions supported portfolio revenue.")})
         else:
             out.append({"icon": "≈", "color": "#94A3B8",
-                        "text": (f"Imbalance and DAM prices tracked closely (€{abs(spread):.2f}/MWh average spread). "
-                                 f"No significant arbitrage opportunity between day-ahead and real-time markets for this period.")})
+                        "text": (f"Imbalance and Day Ahead prices tracked closely (€{abs(spread):.2f}/MWh average spread). "
+                                 f"The imbalance market closely reflected day-ahead pricing, minimising basis risk "
+                                 f"for DA-referenced PPA structures. This period provides a useful benchmark for "
+                                 f"PPA pricing discussions where low basis risk assumptions are being justified.")})
 
     return out
 
@@ -575,8 +593,8 @@ with tab1:
                     f'min-width:14px;height:14px;display:inline-flex;align-items:center;'
                     f'justify-content:center;margin-left:6px;flex-shrink:0;line-height:1">?</span>')
 
-        tip_price = ("The real-time price paid or received to correct electricity supply/demand imbalances, "
-                     "in Euro per MWh. High prices signal system stress or scarcity. "
+        tip_price = ("The most recent imbalance settlement price in the dataset, in Euro per MWh. "
+                     "Data is updated once daily — this is not a real-time feed. "
                      "SBP applies when the system is short (needs more power); SSP applies when long (surplus).")
         tip_24h   = ("Compares the latest imbalance price to the average price over the past 24 hours. "
                      "A positive change means conditions are more expensive than recent history; negative means cheaper.")
@@ -598,9 +616,10 @@ with tab1:
                       border:1px solid #2D4A6B;border-top:2px solid {state_color};
                       border-radius:10px;padding:14px 18px">
             <div style="display:flex;align-items:center;margin-bottom:5px">
-              <span class="{dot_cls}"></span>
+              <span style="width:7px;height:7px;background:{state_color};border-radius:50%;
+                           display:inline-block;margin-right:7px;flex-shrink:0"></span>
               <span style="font-size:10px;font-weight:600;color:#8B949E;
-                           text-transform:uppercase;letter-spacing:0.1em">Live Imbalance Price</span>
+                           text-transform:uppercase;letter-spacing:0.1em">Latest Imbalance Price</span>
               {info_badge(tip_price)}
             </div>
             <div style="font-size:34px;font-weight:700;color:{state_color};
@@ -609,6 +628,9 @@ with tab1:
             </div>
             <div style="margin-top:5px;font-size:11px;color:{state_color};
                         font-weight:600;letter-spacing:0.05em">{state_label}</div>
+            <div style="margin-top:4px;font-size:10px;color:#8B949E;
+                        font-family:'JetBrains Mono',monospace">
+              {latest["StartTime"].strftime("%d %b %Y, %H:%M")}</div>
           </div>
 
           <div style="flex:1;min-width:140px;background:#1E2D42;

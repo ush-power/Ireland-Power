@@ -1,138 +1,185 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import date, timedelta
 from google.oauth2 import service_account
 from google.cloud import bigquery
+import base64, os
 
 # ============================================================================
-# PAGE CONFIGURATION
+# PAGE CONFIG
 # ============================================================================
 st.set_page_config(
-    page_title="Ireland Power Market | Highfield Energy",
-    page_icon="assets/favicon.png" if False else "⚡",
+    page_title="Ireland Power Terminal | Highfield Energy",
+    page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 # ============================================================================
-# STYLING
+# LOGO HELPER
+# ============================================================================
+def logo_b64() -> str:
+    path = os.path.join(os.path.dirname(__file__), "assets", "logo.png")
+    if os.path.exists(path):
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    return ""
+
+LOGO = logo_b64()
+
+# ============================================================================
+# CSS — DARK TERMINAL THEME
 # ============================================================================
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 /* ── Base ── */
-html, body, [class*="css"], .stApp {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+html, body, .stApp {
+    font-family: 'Inter', -apple-system, sans-serif !important;
+    background-color: #0E1117 !important;
 }
-.stApp { background: #f0f4f8; }
+.stApp { background: #0E1117 !important; }
 
 /* ── Hide Streamlit chrome ── */
-#MainMenu, footer, header { visibility: hidden; }
-.stDeployButton { display: none !important; }
-[data-testid="stToolbar"] { display: none !important; }
+#MainMenu, footer, header,
+.stDeployButton,
+[data-testid="stToolbar"],
+[data-testid="stDecoration"] {
+    display: none !important;
+    visibility: hidden !important;
+}
 
-/* ── Main content area ── */
+/* ── Main content padding ── */
 .block-container {
-    padding: 2rem 2.5rem 2rem !important;
-    max-width: 1440px !important;
+    padding: 1.5rem 2rem 2rem !important;
+    max-width: 1600px !important;
 }
 
 /* ── Sidebar ── */
 [data-testid="stSidebar"] {
-    background: #0c1f3d !important;
-    border-right: none !important;
-}
-[data-testid="stSidebar"] > div:first-child {
-    padding-top: 2rem;
-}
-[data-testid="stSidebar"] p,
-[data-testid="stSidebar"] span,
-[data-testid="stSidebar"] label,
-[data-testid="stSidebar"] .stCaption,
-[data-testid="stSidebar"] .stMarkdown {
-    color: #94a3b8 !important;
-}
-[data-testid="stSidebar"] h1,
-[data-testid="stSidebar"] h2,
-[data-testid="stSidebar"] h3 {
-    color: #ffffff !important;
+    background: #161B22 !important;
+    border-right: 1px solid #30363D !important;
+    min-width: 260px !important;
 }
 [data-testid="stSidebar"] hr {
-    border-color: #1e3a5f !important;
-    margin: 1.2rem 0 !important;
+    border-color: #30363D !important;
+    margin: 1rem 0 !important;
 }
-/* Slider track */
-[data-testid="stSidebar"] [data-testid="stSlider"] div[data-baseweb="slider"] div {
-    background: #1e3a5f !important;
-}
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] span,
+[data-testid="stSidebar"] small,
+[data-testid="stSidebar"] .stCaption { color: #8B949E !important; }
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3 { color: #E6EDF3 !important; }
 
 /* ── Tabs ── */
 .stTabs [data-baseweb="tab-list"] {
-    background: transparent !important;
-    border-bottom: 2px solid #e2e8f0 !important;
+    background: #161B22 !important;
+    border-bottom: 1px solid #30363D !important;
     gap: 0 !important;
     padding: 0 !important;
+    border-radius: 8px 8px 0 0 !important;
 }
 .stTabs [data-baseweb="tab"] {
     background: transparent !important;
     border: none !important;
-    border-bottom: 3px solid transparent !important;
-    margin-bottom: -2px !important;
-    padding: 0 24px !important;
-    height: 46px !important;
-    font-size: 13px !important;
+    border-bottom: 2px solid transparent !important;
+    margin-bottom: -1px !important;
+    padding: 0 22px !important;
+    height: 44px !important;
+    font-size: 12px !important;
     font-weight: 600 !important;
-    color: #64748b !important;
-    letter-spacing: 0.01em !important;
+    color: #8B949E !important;
+    letter-spacing: 0.07em !important;
+    text-transform: uppercase !important;
 }
 .stTabs [aria-selected="true"] {
-    color: #1d4ed8 !important;
-    border-bottom: 3px solid #1d4ed8 !important;
+    color: #E6EDF3 !important;
+    border-bottom: 2px solid #FF4B4B !important;
 }
 .stTabs [data-baseweb="tab-panel"] {
-    padding-top: 1.5rem !important;
     background: transparent !important;
+    padding-top: 1.25rem !important;
+}
+
+/* ── Chart cards ── */
+[data-testid="stPlotlyChart"] {
+    background: #1E1E1E !important;
+    border: 1px solid #30363D !important;
+    border-radius: 12px !important;
+    padding: 4px !important;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5) !important;
+}
+
+/* ── Dataframe cards ── */
+[data-testid="stDataFrame"] {
+    background: #1E1E1E !important;
+    border: 1px solid #30363D !important;
+    border-radius: 12px !important;
+    overflow: hidden !important;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5) !important;
 }
 
 /* ── Download button ── */
 .stDownloadButton > button {
-    background: white !important;
-    color: #1d4ed8 !important;
-    border: 1.5px solid #1d4ed8 !important;
-    border-radius: 8px !important;
-    font-weight: 600 !important;
-    font-size: 13px !important;
-    padding: 6px 18px !important;
-    transition: all 0.15s ease !important;
+    background: transparent !important;
+    color: #8B949E !important;
+    border: 1px solid #30363D !important;
+    border-radius: 6px !important;
+    font-size: 11px !important;
+    font-weight: 500 !important;
+    padding: 5px 14px !important;
+    letter-spacing: 0.04em !important;
 }
 .stDownloadButton > button:hover {
-    background: #eff6ff !important;
-    box-shadow: 0 2px 8px rgba(29,78,216,0.15) !important;
+    border-color: #8B949E !important;
+    color: #E6EDF3 !important;
 }
 
 /* ── Spinner ── */
-.stSpinner > div { border-top-color: #1d4ed8 !important; }
+.stSpinner > div { border-top-color: #FF4B4B !important; }
 
-/* ── Warning / info ── */
-.stAlert {
-    border-radius: 10px !important;
-    font-size: 13px !important;
+/* ── Divider ── */
+hr { border-color: #30363D !important; margin: 0.75rem 0 !important; }
+
+/* ── Pulse animations ── */
+@keyframes pulse-red {
+    0%   { box-shadow: 0 0 0 0 rgba(255,75,75,0.7); }
+    70%  { box-shadow: 0 0 0 7px rgba(255,75,75,0); }
+    100% { box-shadow: 0 0 0 0 rgba(255,75,75,0); }
+}
+@keyframes pulse-cyan {
+    0%   { box-shadow: 0 0 0 0 rgba(0,212,255,0.7); }
+    70%  { box-shadow: 0 0 0 7px rgba(0,212,255,0); }
+    100% { box-shadow: 0 0 0 0 rgba(0,212,255,0); }
+}
+.dot-sbp {
+    display: inline-block; width: 8px; height: 8px;
+    border-radius: 50%; background: #FF4B4B;
+    animation: pulse-red 1.8s infinite;
+    margin-right: 7px; vertical-align: middle;
+}
+.dot-ssp {
+    display: inline-block; width: 8px; height: 8px;
+    border-radius: 50%; background: #00D4FF;
+    animation: pulse-cyan 1.8s infinite;
+    margin-right: 7px; vertical-align: middle;
 }
 
-/* ── Dataframe ── */
-[data-testid="stDataFrame"] {
-    border-radius: 10px !important;
-    border: 1px solid #e2e8f0 !important;
-    overflow: hidden !important;
-}
+/* ── Alert ── */
+.stAlert { border-radius: 8px !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ============================================================================
-# BIGQUERY CONNECTION
+# BIGQUERY
 # ============================================================================
 @st.cache_resource
 def get_bq_client():
@@ -149,10 +196,9 @@ def get_bq_client():
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_imbalance(start: str, end: str) -> pd.DataFrame:
     query = f"""
-        SELECT
-            StartTime,
-            CAST(ImbalancePrice     AS FLOAT64) AS ImbalancePrice,
-            CAST(NetImbalanceVolume AS FLOAT64) AS NetImbalanceVolume
+        SELECT StartTime,
+               CAST(ImbalancePrice     AS FLOAT64) AS ImbalancePrice,
+               CAST(NetImbalanceVolume AS FLOAT64) AS NetImbalanceVolume
         FROM `semo-price-automation.semo_data.imbalance_prices_5min`
         WHERE DATE(TradeDate) BETWEEN '{start}' AND '{end}'
         ORDER BY StartTime
@@ -165,9 +211,8 @@ def fetch_imbalance(start: str, end: str) -> pd.DataFrame:
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_dam(start: str, end: str) -> pd.DataFrame:
     query = f"""
-        SELECT
-            StartTime,
-            CAST(Price AS FLOAT64) AS Price
+        SELECT StartTime,
+               CAST(Price AS FLOAT64) AS Price
         FROM `semo-price-automation.semo_data.dam_prices_hourly`
         WHERE DATE(TradeDate) BETWEEN '{start}' AND '{end}'
         ORDER BY StartTime
@@ -178,98 +223,89 @@ def fetch_dam(start: str, end: str) -> pd.DataFrame:
 
 
 # ============================================================================
-# UI COMPONENTS
+# HELPERS
 # ============================================================================
-def kpi_card(label: str, value: str, sub: str = "", accent: str = "#1d4ed8") -> str:
-    return f"""
-    <div style="
-        background:#ffffff;
-        border:1px solid #e2e8f0;
-        border-top:3px solid {accent};
-        border-radius:10px;
-        padding:20px 22px 16px;
-        box-shadow:0 1px 4px rgba(15,23,42,0.06);
-        height:100%;
-    ">
-        <p style="margin:0;font-size:11px;font-weight:600;color:#94a3b8;
-                  text-transform:uppercase;letter-spacing:0.07em">{label}</p>
-        <p style="margin:10px 0 0;font-size:26px;font-weight:700;
-                  color:#0f172a;line-height:1.1;font-variant-numeric:tabular-nums">{value}</p>
-        <p style="margin:6px 0 0;font-size:12px;color:#64748b">{sub}</p>
-    </div>"""
+def system_state(niv: float):
+    if niv < 0:
+        return "SBP · SYSTEM SHORT", "#FF4B4B", "dot-sbp"
+    elif niv > 0:
+        return "SSP · SYSTEM LONG", "#00D4FF", "dot-ssp"
+    return "BALANCED", "#C9D1D9", "dot-ssp"
 
 
-def kpi_row(series: pd.Series, label: str):
-    avg  = series.mean()
-    peak = series.max()
-    low  = series.min()
-    std  = series.std()
-    cols = st.columns(4)
-    cols[0].markdown(kpi_card("Average Price",    f"€{avg:.2f}", "EUR / MWh", "#1d4ed8"), unsafe_allow_html=True)
-    cols[1].markdown(kpi_card("Peak Price",       f"€{peak:.2f}", "EUR / MWh", "#7c3aed"), unsafe_allow_html=True)
-    cols[2].markdown(kpi_card("Minimum Price",    f"€{low:.2f}", "EUR / MWh", "#0d9488"), unsafe_allow_html=True)
-    cols[3].markdown(kpi_card("Std Deviation",    f"€{std:.2f}", "EUR / MWh", "#f59e0b"), unsafe_allow_html=True)
+def count_niv_flips(series) -> int:
+    s = np.sign(pd.Series(series).dropna().values)
+    s = s[s != 0]
+    return int(np.sum(s[1:] != s[:-1])) if len(s) > 1 else 0
 
 
-def chart_layout(title: str, y_label: str, height: int = 420, rangeslider: bool = True) -> dict:
-    """Returns a consistent professional Plotly layout."""
+# Shared Plotly layout for all charts
+def dark_layout(title: str, height: int = 420) -> dict:
+    axis = dict(
+        gridcolor="rgba(255,255,255,0.04)",
+        linecolor="#30363D",
+        tickfont=dict(size=10, color="#8B949E"),
+        zeroline=False,
+        showspikes=True,
+        spikemode="across",
+        spikesnap="cursor",
+        spikedash="dot",
+        spikecolor="#444",
+        spikethickness=1,
+    )
     return dict(
-        title=dict(text=title, font=dict(size=14, color="#0f172a", family="Inter"), x=0, xanchor="left"),
-        paper_bgcolor="white",
-        plot_bgcolor="white",
-        font=dict(family="Inter, -apple-system, sans-serif", color="#374151", size=12),
-        xaxis=dict(
-            gridcolor="#f1f5f9", gridwidth=1,
-            linecolor="#e2e8f0", tickcolor="#cbd5e1",
-            tickfont=dict(size=11, color="#64748b"),
-            title_text="",
-            zeroline=False,
-            rangeslider=dict(visible=rangeslider, thickness=0.04, bgcolor="#f8fafc"),
-        ),
-        yaxis=dict(
-            gridcolor="#f1f5f9", gridwidth=1,
-            linecolor="#e2e8f0", tickcolor="#cbd5e1",
-            tickfont=dict(size=11, color="#64748b"),
-            title_text=y_label,
-            title_font=dict(size=11, color="#94a3b8"),
-            zeroline=False,
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter, sans-serif", color="#C9D1D9", size=11),
+        title=dict(
+            text=title,
+            font=dict(size=12, color="#8B949E", family="Inter"),
+            x=0.01, xanchor="left",
         ),
         hovermode="x unified",
         hoverlabel=dict(
-            bgcolor="white", bordercolor="#e2e8f0",
-            font=dict(size=12, color="#0f172a", family="Inter"),
+            bgcolor="#1C2128", bordercolor="#444",
+            font=dict(size=11, color="#E6EDF3",
+                      family="'JetBrains Mono', monospace"),
         ),
         legend=dict(
-            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-            bgcolor="rgba(255,255,255,0)", borderwidth=0,
-            font=dict(size=12),
+            bgcolor="rgba(22,27,34,0.9)", bordercolor="#30363D",
+            borderwidth=1, font=dict(size=11),
+            orientation="h", yanchor="bottom", y=1.02,
+            xanchor="right", x=1,
         ),
-        margin=dict(t=50, b=10, l=10, r=10),
+        margin=dict(t=44, b=8, l=8, r=8),
         height=height,
+        xaxis={**axis},
+        yaxis={**axis},
     )
-
-
-def section_divider():
-    st.markdown("<div style='height:1.5rem'></div>", unsafe_allow_html=True)
 
 
 # ============================================================================
 # SIDEBAR
 # ============================================================================
 with st.sidebar:
+    # Logo
+    if LOGO:
+        st.markdown(f"""
+        <div style="background:#fff;border-radius:8px;padding:10px 14px;margin-bottom:16px">
+            <img src="data:image/png;base64,{LOGO}" style="width:100%;max-width:200px;display:block;margin:auto">
+        </div>""", unsafe_allow_html=True)
+
     st.markdown("""
-    <div style="padding:0 0 8px">
-        <p style="margin:0;font-size:11px;font-weight:600;color:#4a6fa5;
-                  text-transform:uppercase;letter-spacing:0.1em">Highfield Energy</p>
-        <h2 style="margin:6px 0 0;font-size:20px;font-weight:700;color:#ffffff;line-height:1.2">
-            Ireland Power<br>Market
-        </h2>
-    </div>
+    <p style="margin:0;font-size:10px;font-weight:600;color:#FF4B4B;
+              text-transform:uppercase;letter-spacing:0.12em">Power Market Terminal</p>
+    <p style="margin:4px 0 0;font-size:13px;color:#E6EDF3;font-weight:500">
+        Ireland · SEMO / SEMOPX
+    </p>
     """, unsafe_allow_html=True)
 
     st.divider()
 
-    st.markdown("<p style='margin:0 0 10px;font-size:12px;font-weight:600;color:#cbd5e1;text-transform:uppercase;letter-spacing:0.07em'>Date Range</p>", unsafe_allow_html=True)
+    st.markdown("""<p style="margin:0 0 10px;font-size:10px;font-weight:600;
+    color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Select Date Range</p>""",
+    unsafe_allow_html=True)
 
     yesterday  = date.today() - timedelta(days=1)
     data_start = date(2025, 1, 1)
@@ -283,27 +319,45 @@ with st.sidebar:
         label_visibility="collapsed",
     )
 
-    days_selected = (date_to - date_from).days + 1
+    days_sel = (date_to - date_from).days + 1
     st.markdown(f"""
-    <div style="background:#1e3a5f;border-radius:8px;padding:10px 14px;margin-top:10px">
-        <p style="margin:0;font-size:12px;color:#94a3b8">{date_from.strftime('%d %b %Y')} → {date_to.strftime('%d %b %Y')}</p>
-        <p style="margin:4px 0 0;font-size:13px;font-weight:600;color:#ffffff">{days_selected} day{'s' if days_selected != 1 else ''} selected</p>
+    <div style="background:#0D1117;border:1px solid #30363D;border-radius:8px;
+                padding:10px 14px;margin-top:10px">
+        <p style="margin:0;font-size:11px;color:#8B949E;font-family:'JetBrains Mono',monospace">
+            {date_from.strftime('%d %b %Y')} → {date_to.strftime('%d %b %Y')}
+        </p>
+        <p style="margin:4px 0 0;font-size:13px;font-weight:600;color:#E6EDF3">
+            {days_sel} day{'s' if days_sel != 1 else ''}
+        </p>
     </div>
     """, unsafe_allow_html=True)
 
     st.divider()
 
     st.markdown("""
-    <div style="padding:0 0 4px">
-        <p style="margin:0 0 6px;font-size:11px;color:#64748b">Data Sources</p>
-        <p style="margin:0 0 4px;font-size:12px;color:#94a3b8">⚡ SEMO — Imbalance Pricing</p>
-        <p style="margin:0 0 4px;font-size:12px;color:#94a3b8">📈 SEMOPX — Day Ahead Market</p>
-        <p style="margin:0;font-size:12px;color:#4a6fa5">🌐 Aurora — Coming Soon</p>
+    <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;align-items:center;gap:8px">
+            <span style="width:6px;height:6px;background:#FF4B4B;border-radius:50%;
+                         display:inline-block;flex-shrink:0"></span>
+            <span style="font-size:11px;color:#8B949E">SEMO · Imbalance</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+            <span style="width:6px;height:6px;background:#00D4FF;border-radius:50%;
+                         display:inline-block;flex-shrink:0"></span>
+            <span style="font-size:11px;color:#8B949E">SEMOPX · Day Ahead</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+            <span style="width:6px;height:6px;background:#30363D;border-radius:50%;
+                         display:inline-block;flex-shrink:0"></span>
+            <span style="font-size:11px;color:#444D56">Aurora · Coming Soon</span>
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
     st.divider()
-    st.markdown("<p style='margin:0;font-size:11px;color:#334155'>Updated daily · Queries cached 1 hr</p>", unsafe_allow_html=True)
+    st.markdown("""<p style="margin:0;font-size:10px;color:#444D56;
+    font-family:'JetBrains Mono',monospace">Updated daily · Cached 1h</p>""",
+    unsafe_allow_html=True)
 
 
 start_str = date_from.strftime("%Y-%m-%d")
@@ -311,37 +365,44 @@ end_str   = date_to.strftime("%Y-%m-%d")
 
 
 # ============================================================================
-# PAGE HEADER
+# HEADER BAR
 # ============================================================================
+logo_html = (f'<img src="data:image/png;base64,{LOGO}" '
+             f'style="height:32px;margin-right:14px;vertical-align:middle;'
+             f'background:white;border-radius:4px;padding:3px 6px">')  if LOGO else ""
+
 st.markdown(f"""
 <div style="
-    background:white;
-    border:1px solid #e2e8f0;
-    border-radius:12px;
-    padding:24px 28px;
-    margin-bottom:24px;
-    box-shadow:0 1px 4px rgba(15,23,42,0.05);
+    background:#161B22;
+    border:1px solid #30363D;
+    border-radius:10px;
+    padding:14px 20px;
+    margin-bottom:18px;
     display:flex;
     align-items:center;
     justify-content:space-between;
 ">
-    <div>
-        <p style="margin:0;font-size:11px;font-weight:600;color:#94a3b8;
-                  text-transform:uppercase;letter-spacing:0.1em">Highfield Energy</p>
-        <h1 style="margin:6px 0 4px;font-size:22px;font-weight:700;color:#0f172a">
-            Ireland Power Market Dashboard
-        </h1>
-        <p style="margin:0;font-size:13px;color:#64748b">
-            SEMO Imbalance Pricing &amp; Day Ahead Market — Ireland
-        </p>
+    <div style="display:flex;align-items:center">
+        {logo_html}
+        <div>
+            <p style="margin:0;font-size:10px;font-weight:600;color:#FF4B4B;
+                      text-transform:uppercase;letter-spacing:0.1em">
+                Highfield Energy · Power Market Terminal
+            </p>
+            <p style="margin:3px 0 0;font-size:17px;font-weight:700;color:#E6EDF3;
+                      letter-spacing:0.01em">
+                Ireland Electricity Market
+            </p>
+        </div>
     </div>
     <div style="text-align:right">
-        <p style="margin:0;font-size:11px;color:#94a3b8;text-transform:uppercase;
-                  letter-spacing:0.07em;font-weight:600">Selected Period</p>
-        <p style="margin:6px 0 0;font-size:16px;font-weight:700;color:#0f172a">
-            {date_from.strftime('%d %b %Y')} &nbsp;→&nbsp; {date_to.strftime('%d %b %Y')}
+        <p style="margin:0;font-size:10px;color:#8B949E;text-transform:uppercase;
+                  letter-spacing:0.07em">Period</p>
+        <p style="margin:4px 0 0;font-size:13px;font-weight:600;color:#E6EDF3;
+                  font-family:'JetBrains Mono',monospace">
+            {date_from.strftime('%d %b %Y')} → {date_to.strftime('%d %b %Y')}
         </p>
-        <p style="margin:4px 0 0;font-size:12px;color:#64748b">{days_selected} day{'s' if days_selected != 1 else ''}</p>
+        <p style="margin:3px 0 0;font-size:11px;color:#8B949E">{days_sel} days · SEMO / SEMOPX</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -350,217 +411,483 @@ st.markdown(f"""
 # ============================================================================
 # TABS
 # ============================================================================
-tab_imb, tab_dam, tab_comp, tab_aurora = st.tabs([
-    "  Imbalance Prices  ",
-    "  Day Ahead Prices  ",
-    "  Comparison  ",
+tab1, tab2, tab3, tab4 = st.tabs([
+    "  Live Monitor  ",
+    "  Historical Analysis  ",
+    "  Statistical Edge  ",
     "  Aurora  ",
 ])
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# TAB 1 — IMBALANCE PRICES
-# ─────────────────────────────────────────────────────────────────────────────
-with tab_imb:
-    with st.spinner("Loading imbalance data…"):
+# ════════════════════════════════════════════════════════════════════════════
+# TAB 1 — LIVE MONITOR
+# ════════════════════════════════════════════════════════════════════════════
+with tab1:
+    with st.spinner("Loading…"):
         imb_df = fetch_imbalance(start_str, end_str)
 
     if imb_df.empty:
-        st.warning("No imbalance data found for the selected date range.")
+        st.warning("No imbalance data for the selected period.")
     else:
-        kpi_row(imb_df["ImbalancePrice"], "Imbalance Price")
-        section_divider()
+        latest       = imb_df.iloc[-1]
+        latest_price = latest["ImbalancePrice"]
+        latest_niv   = latest["NetImbalanceVolume"]
+        state_label, state_color, dot_cls = system_state(latest_niv)
 
-        # Price chart
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=imb_df["StartTime"],
-            y=imb_df["ImbalancePrice"],
-            mode="lines",
-            name="Imbalance Price",
-            line=dict(color="#1d4ed8", width=1.5),
-            fill="tozeroy",
-            fillcolor="rgba(29,78,216,0.05)",
-            hovertemplate="<b>%{x|%d %b %Y %H:%M}</b><br>€%{y:.2f} / MWh<extra></extra>",
-        ))
-        fig.update_layout(**chart_layout("5-Minute Imbalance Price", "EUR / MWh", height=420))
+        # 24h comparison
+        cutoff = imb_df["StartTime"].max() - pd.Timedelta(hours=24)
+        prev_avg = imb_df[imb_df["StartTime"] <= cutoff]["ImbalancePrice"].mean()
+        if prev_avg and prev_avg > 0:
+            chg     = latest_price - prev_avg
+            chg_pct = (chg / prev_avg) * 100
+            chg_col = "#FF4B4B" if chg > 0 else "#00FF41"
+            chg_str = f"{'+' if chg>0 else ''}€{chg:.2f} ({'+' if chg_pct>0 else ''}{chg_pct:.1f}%)"
+        else:
+            chg_str, chg_col = "—", "#8B949E"
+
+        peak = imb_df["ImbalancePrice"].max()
+        avg  = imb_df["ImbalancePrice"].mean()
+
+        # ── KPI Ribbon ──
+        st.markdown(f"""
+        <div style="display:flex;gap:10px;margin-bottom:18px;flex-wrap:wrap">
+
+          <div style="flex:1.6;min-width:200px;background:#1E1E1E;
+                      border:1px solid #30363D;border-top:2px solid {state_color};
+                      border-radius:10px;padding:14px 18px">
+            <div style="display:flex;align-items:center;margin-bottom:5px">
+              <span class="{dot_cls}"></span>
+              <span style="font-size:10px;font-weight:600;color:#8B949E;
+                           text-transform:uppercase;letter-spacing:0.1em">Live Imbalance Price</span>
+            </div>
+            <div style="font-size:34px;font-weight:700;color:{state_color};
+                        font-family:'JetBrains Mono',monospace;line-height:1">
+              €{latest_price:.2f}
+            </div>
+            <div style="margin-top:5px;font-size:11px;color:{state_color};
+                        font-weight:600;letter-spacing:0.05em">{state_label}</div>
+          </div>
+
+          <div style="flex:1;min-width:140px;background:#1E1E1E;
+                      border:1px solid #30363D;border-top:2px solid #30363D;
+                      border-radius:10px;padding:14px 18px">
+            <p style="margin:0 0 5px;font-size:10px;font-weight:600;color:#8B949E;
+                      text-transform:uppercase;letter-spacing:0.1em">24H Change</p>
+            <p style="margin:0;font-size:22px;font-weight:700;color:{chg_col};
+                      font-family:'JetBrains Mono',monospace">{chg_str}</p>
+            <p style="margin:5px 0 0;font-size:10px;color:#8B949E">vs 24h avg</p>
+          </div>
+
+          <div style="flex:1;min-width:140px;background:#1E1E1E;
+                      border:1px solid #30363D;border-top:2px solid #FF4B4B;
+                      border-radius:10px;padding:14px 18px">
+            <p style="margin:0 0 5px;font-size:10px;font-weight:600;color:#8B949E;
+                      text-transform:uppercase;letter-spacing:0.1em">Period Peak</p>
+            <p style="margin:0;font-size:22px;font-weight:700;color:#FF4B4B;
+                      font-family:'JetBrains Mono',monospace">€{peak:.2f}</p>
+            <p style="margin:5px 0 0;font-size:10px;color:#8B949E">EUR / MWh</p>
+          </div>
+
+          <div style="flex:1;min-width:140px;background:#1E1E1E;
+                      border:1px solid #30363D;border-top:2px solid #00D4FF;
+                      border-radius:10px;padding:14px 18px">
+            <p style="margin:0 0 5px;font-size:10px;font-weight:600;color:#8B949E;
+                      text-transform:uppercase;letter-spacing:0.1em">Period Average</p>
+            <p style="margin:0;font-size:22px;font-weight:700;color:#00D4FF;
+                      font-family:'JetBrains Mono',monospace">€{avg:.2f}</p>
+            <p style="margin:5px 0 0;font-size:10px;color:#8B949E">EUR / MWh</p>
+          </div>
+
+          <div style="flex:1;min-width:140px;background:#1E1E1E;
+                      border:1px solid #30363D;border-top:2px solid #00FF41;
+                      border-radius:10px;padding:14px 18px">
+            <p style="margin:0 0 5px;font-size:10px;font-weight:600;color:#8B949E;
+                      text-transform:uppercase;letter-spacing:0.1em">Latest NIV</p>
+            <p style="margin:0;font-size:22px;font-weight:700;color:#00FF41;
+                      font-family:'JetBrains Mono',monospace">{latest_niv:+.1f}</p>
+            <p style="margin:5px 0 0;font-size:10px;color:#8B949E">MWh</p>
+          </div>
+
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ── Synced Price + Volume chart (shared x-axis) ──
+        fig = make_subplots(
+            rows=2, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.03,
+            row_heights=[0.65, 0.35],
+        )
+
+        # Split by system state for colour
+        for mask, name, col, fill in [
+            (imb_df["NetImbalanceVolume"] < 0,  "SBP (Short)", "#FF4B4B", "rgba(255,75,75,0.07)"),
+            (imb_df["NetImbalanceVolume"] >= 0, "SSP (Long)",  "#00D4FF", "rgba(0,212,255,0.07)"),
+        ]:
+            seg = imb_df.copy()
+            seg.loc[~mask, "ImbalancePrice"] = None
+            fig.add_trace(go.Scatter(
+                x=seg["StartTime"], y=seg["ImbalancePrice"],
+                mode="lines", name=name,
+                line=dict(color=col, width=1.5),
+                fill="tozeroy", fillcolor=fill,
+                hovertemplate="<b>%{x|%d %b %H:%M}</b><br>€%{y:.2f}/MWh<extra>" + name + "</extra>",
+            ), row=1, col=1)
+
+        vol_colors = imb_df["NetImbalanceVolume"].apply(
+            lambda v: "#00FF41" if v >= 0 else "#FF4B4B"
+        )
+        fig.add_trace(go.Bar(
+            x=imb_df["StartTime"], y=imb_df["NetImbalanceVolume"],
+            name="NIV", marker_color=vol_colors,
+            hovertemplate="<b>%{x|%d %b %H:%M}</b><br>%{y:+.1f} MWh<extra>NIV</extra>",
+        ), row=2, col=1)
+
+        axis_style = dict(
+            gridcolor="rgba(255,255,255,0.04)", linecolor="#30363D",
+            tickfont=dict(size=10, color="#8B949E"), zeroline=False,
+            showspikes=True, spikemode="across", spikesnap="cursor",
+            spikedash="dot", spikecolor="#444", spikethickness=1,
+        )
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(family="Inter", color="#C9D1D9", size=11),
+            hovermode="x unified",
+            hoverlabel=dict(bgcolor="#1C2128", bordercolor="#444",
+                            font=dict(size=11, color="#E6EDF3",
+                                      family="'JetBrains Mono',monospace")),
+            legend=dict(bgcolor="rgba(22,27,34,0.9)", bordercolor="#30363D",
+                        borderwidth=1, font=dict(size=11),
+                        orientation="h", yanchor="bottom", y=1.02,
+                        xanchor="right", x=1),
+            margin=dict(t=44, b=8, l=8, r=8),
+            height=560,
+            title=dict(text="IMBALANCE PRICE  ·  NET IMBALANCE VOLUME",
+                       font=dict(size=12, color="#8B949E"), x=0.01),
+            xaxis={**axis_style, "showticklabels": False},
+            xaxis2={**axis_style,
+                    "rangeslider": dict(visible=True, bgcolor="#0D1117", thickness=0.04)},
+            yaxis={**axis_style,
+                   "title": dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))},
+            yaxis2={**axis_style,
+                    "title": dict(text="NIV (MWh)", font=dict(size=10, color="#8B949E")),
+                    "zeroline": True, "zerolinecolor": "#333"},
+        )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        section_divider()
+        # ── Latest readings data grid ──
+        st.markdown("<p style='font-size:11px;font-weight:600;color:#8B949E;"
+                    "text-transform:uppercase;letter-spacing:0.1em;"
+                    "margin:16px 0 8px'>Latest Readings</p>",
+                    unsafe_allow_html=True)
 
-        # Volume chart
-        vol_colours = imb_df["NetImbalanceVolume"].apply(
-            lambda v: "#0d9488" if v >= 0 else "#dc2626"
+        recent = imb_df.tail(96).copy().iloc[::-1]
+        recent["Direction"] = recent["NetImbalanceVolume"].apply(
+            lambda v: "🔴  SBP · Short" if v < 0 else "🔵  SSP · Long"
         )
-        fig2 = go.Figure()
-        fig2.add_trace(go.Bar(
-            x=imb_df["StartTime"],
-            y=imb_df["NetImbalanceVolume"],
-            name="Net Imbalance Volume",
-            marker_color=vol_colours,
-            hovertemplate="<b>%{x|%d %b %Y %H:%M}</b><br>%{y:.1f} MWh<extra></extra>",
-        ))
-        fig2.update_layout(**chart_layout(
-            "Net Imbalance Volume  —  Teal = System Long  ·  Red = System Short",
-            "MWh", height=280, rangeslider=False,
-        ))
-        st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
+        grid_df = recent[["StartTime", "ImbalancePrice", "NetImbalanceVolume", "Direction"]].copy()
+        grid_df.columns = ["Time", "Price (€/MWh)", "NIV (MWh)", "System State"]
+        max_vol = float(grid_df["NIV (MWh)"].abs().max()) or 1.0
 
-        section_divider()
-        st.download_button(
-            "↓  Export Imbalance Data (CSV)",
-            data=imb_df.to_csv(index=False),
-            file_name=f"imbalance_{start_str}_to_{end_str}.csv",
-            mime="text/csv",
+        st.dataframe(
+            grid_df, use_container_width=True, hide_index=True, height=340,
+            column_config={
+                "Time": st.column_config.DatetimeColumn("Time", format="DD MMM HH:mm", width="small"),
+                "Price (€/MWh)": st.column_config.NumberColumn("Price (€/MWh)", format="€%.2f", width="small"),
+                "NIV (MWh)": st.column_config.ProgressColumn(
+                    "NIV (MWh)", format="%.1f", min_value=-max_vol, max_value=max_vol, width="large",
+                ),
+                "System State": st.column_config.TextColumn("System State", width="medium"),
+            },
         )
+        st.download_button("↓  Export CSV", data=imb_df.to_csv(index=False),
+                           file_name=f"imbalance_{start_str}_{end_str}.csv", mime="text/csv")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# TAB 2 — DAY AHEAD PRICES
-# ─────────────────────────────────────────────────────────────────────────────
-with tab_dam:
-    with st.spinner("Loading DAM data…"):
-        dam_df = fetch_dam(start_str, end_str)
+# ════════════════════════════════════════════════════════════════════════════
+# TAB 2 — HISTORICAL ANALYSIS
+# ════════════════════════════════════════════════════════════════════════════
+with tab2:
+    with st.spinner("Loading…"):
+        imb_h = fetch_imbalance(start_str, end_str)
+        dam_h = fetch_dam(start_str, end_str)
 
-    if dam_df.empty:
-        st.warning("No DAM data found for the selected date range.")
+    if imb_h.empty:
+        st.warning("No data for the selected period.")
     else:
-        kpi_row(dam_df["Price"], "DAM Price")
-        section_divider()
+        col_a, col_b = st.columns([3, 2])
 
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=dam_df["StartTime"],
-            y=dam_df["Price"],
-            mode="lines+markers",
-            name="DAM Price",
-            line=dict(color="#0d9488", width=2),
-            marker=dict(size=4, color="#0d9488"),
-            fill="tozeroy",
-            fillcolor="rgba(13,148,136,0.06)",
-            hovertemplate="<b>%{x|%d %b %Y %H:%M}</b><br>€%{y:.2f} / MWh<extra></extra>",
-        ))
-        fig.update_layout(**chart_layout(
-            "Day Ahead Market — Harmonised Reference Price", "EUR / MWh", height=450,
-        ))
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        with col_a:
+            # Volatility + Price synced subplot
+            hourly_p = imb_h.set_index("StartTime")["ImbalancePrice"].resample("1h").mean()
+            roll_vol = hourly_p.rolling(24).std().reset_index()
+            roll_vol.columns = ["t", "vol"]
+            hourly_p = hourly_p.reset_index()
+            hourly_p.columns = ["t", "p"]
 
-        section_divider()
-        st.download_button(
-            "↓  Export DAM Data (CSV)",
-            data=dam_df.to_csv(index=False),
-            file_name=f"dam_{start_str}_to_{end_str}.csv",
-            mime="text/csv",
-        )
+            vfig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                 vertical_spacing=0.03, row_heights=[0.6, 0.4])
+            vfig.add_trace(go.Scatter(
+                x=hourly_p["t"], y=hourly_p["p"],
+                mode="lines", name="Hourly Avg Price",
+                line=dict(color="#00D4FF", width=1.5),
+                fill="tozeroy", fillcolor="rgba(0,212,255,0.07)",
+                hovertemplate="<b>%{x|%d %b %H:%M}</b><br>€%{y:.2f}/MWh<extra></extra>",
+            ), row=1, col=1)
+            if not dam_h.empty:
+                vfig.add_trace(go.Scatter(
+                    x=dam_h["StartTime"], y=dam_h["Price"],
+                    mode="lines+markers", name="DAM Price",
+                    line=dict(color="#7c3aed", width=1.5),
+                    marker=dict(size=3),
+                    hovertemplate="<b>%{x|%d %b %H:%M}</b><br>€%{y:.2f}/MWh<extra>DAM</extra>",
+                ), row=1, col=1)
+            vfig.add_trace(go.Scatter(
+                x=roll_vol["t"], y=roll_vol["vol"],
+                mode="lines", name="24h Volatility (σ)",
+                line=dict(color="#FF4B4B", width=1.5),
+                fill="tozeroy", fillcolor="rgba(255,75,75,0.1)",
+                hovertemplate="<b>%{x|%d %b %H:%M}</b><br>σ €%{y:.2f}<extra></extra>",
+            ), row=2, col=1)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# TAB 3 — COMPARISON
-# ─────────────────────────────────────────────────────────────────────────────
-with tab_comp:
-    with st.spinner("Building comparison…"):
-        imb_comp = fetch_imbalance(start_str, end_str)
-        dam_comp  = fetch_dam(start_str, end_str)
-
-    if imb_comp.empty and dam_comp.empty:
-        st.warning("No data found for the selected date range.")
-    else:
-        fig = go.Figure()
-
-        if not imb_comp.empty:
-            imb_hourly = (
-                imb_comp.set_index("StartTime")
-                .resample("1h")["ImbalancePrice"]
-                .mean()
-                .reset_index()
+            axis_s = dict(gridcolor="rgba(255,255,255,0.04)", linecolor="#30363D",
+                          tickfont=dict(size=10, color="#8B949E"), zeroline=False,
+                          showspikes=True, spikemode="across", spikesnap="cursor",
+                          spikedash="dot", spikecolor="#444", spikethickness=1)
+            vfig.update_layout(
+                template="plotly_dark",
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="Inter", color="#C9D1D9", size=11),
+                hovermode="x unified",
+                hoverlabel=dict(bgcolor="#1C2128", bordercolor="#444",
+                                font=dict(size=11, color="#E6EDF3",
+                                          family="'JetBrains Mono',monospace")),
+                legend=dict(bgcolor="rgba(22,27,34,0.9)", bordercolor="#30363D",
+                            borderwidth=1, font=dict(size=11),
+                            orientation="h", yanchor="bottom", y=1.02,
+                            xanchor="right", x=1),
+                margin=dict(t=44, b=8, l=8, r=8), height=480,
+                title=dict(text="PRICE TREND  ·  24H ROLLING VOLATILITY",
+                           font=dict(size=12, color="#8B949E"), x=0.01),
+                xaxis={**axis_s, "showticklabels": False},
+                xaxis2={**axis_s,
+                        "rangeslider": dict(visible=True, bgcolor="#0D1117", thickness=0.04)},
+                yaxis={**axis_s,
+                       "title": dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))},
+                yaxis2={**axis_s,
+                        "title": dict(text="σ (EUR/MWh)", font=dict(size=10, color="#8B949E"))},
             )
-            fig.add_trace(go.Scatter(
-                x=imb_hourly["StartTime"],
-                y=imb_hourly["ImbalancePrice"],
-                mode="lines",
-                name="Imbalance (hourly avg)",
-                line=dict(color="#1d4ed8", width=2),
-                hovertemplate="<b>%{x|%d %b %Y %H:%M}</b><br>€%{y:.2f} / MWh<extra></extra>",
+            st.plotly_chart(vfig, use_container_width=True, config={"displayModeBar": False})
+
+        with col_b:
+            # Hour-of-day heatmap
+            imb_h2 = imb_h.copy()
+            imb_h2["hour"] = imb_h2["StartTime"].dt.hour
+            imb_h2["day"]  = imb_h2["StartTime"].dt.strftime("%d %b")
+            pivot = (imb_h2.groupby(["day", "hour"])["ImbalancePrice"]
+                     .mean().reset_index()
+                     .pivot(index="day", columns="hour", values="ImbalancePrice"))
+            hfig = go.Figure(go.Heatmap(
+                z=pivot.values,
+                x=[f"{h:02d}:00" for h in pivot.columns],
+                y=list(pivot.index),
+                colorscale="RdYlGn_r",
+                colorbar=dict(title=dict(text="€/MWh", font=dict(color="#8B949E", size=10)),
+                              tickfont=dict(color="#8B949E", size=9), thickness=10),
+                hovertemplate="<b>%{y}  %{x}</b><br>€%{z:.2f}/MWh<extra></extra>",
             ))
-
-        if not dam_comp.empty:
-            fig.add_trace(go.Scatter(
-                x=dam_comp["StartTime"],
-                y=dam_comp["Price"],
-                mode="lines+markers",
-                name="Day Ahead Market",
-                line=dict(color="#0d9488", width=2),
-                marker=dict(size=4),
-                hovertemplate="<b>%{x|%d %b %Y %H:%M}</b><br>€%{y:.2f} / MWh<extra></extra>",
-            ))
-
-        fig.update_layout(**chart_layout(
-            "Imbalance Price vs Day Ahead Market", "EUR / MWh", height=480,
-        ))
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
-        if not imb_comp.empty and not dam_comp.empty:
-            section_divider()
-            st.markdown("<p style='font-size:13px;font-weight:600;color:#0f172a;margin-bottom:12px'>Summary Statistics</p>", unsafe_allow_html=True)
-            stats = pd.DataFrame({
-                "": ["Average", "Peak", "Minimum", "Std Deviation"],
-                "Imbalance Price (€/MWh)": [
-                    f"{imb_comp['ImbalancePrice'].mean():.2f}",
-                    f"{imb_comp['ImbalancePrice'].max():.2f}",
-                    f"{imb_comp['ImbalancePrice'].min():.2f}",
-                    f"{imb_comp['ImbalancePrice'].std():.2f}",
-                ],
-                "DAM Price (€/MWh)": [
-                    f"{dam_comp['Price'].mean():.2f}",
-                    f"{dam_comp['Price'].max():.2f}",
-                    f"{dam_comp['Price'].min():.2f}",
-                    f"{dam_comp['Price'].std():.2f}",
-                ],
+            hfig.update_layout(**{
+                **dark_layout("PRICE HEATMAP  ·  HOUR × DAY",
+                              height=max(300, len(pivot) * 26 + 80)),
+                "xaxis": {**dark_layout("")["xaxis"], "showspikes": False,
+                          "tickangle": -45, "tickfont": dict(size=9, color="#8B949E")},
+                "yaxis": {**dark_layout("")["yaxis"], "showspikes": False,
+                          "tickfont": dict(size=9, color="#8B949E")},
             })
-            st.dataframe(stats, use_container_width=True, hide_index=True)
+            st.plotly_chart(hfig, use_container_width=True, config={"displayModeBar": False})
+
+        # Daily summary table with sparklines
+        st.markdown("<p style='font-size:11px;font-weight:600;color:#8B949E;"
+                    "text-transform:uppercase;letter-spacing:0.1em;"
+                    "margin:16px 0 8px'>Daily Summary</p>", unsafe_allow_html=True)
+
+        imb_h["Date"] = imb_h["StartTime"].dt.date
+        daily = (imb_h.groupby("Date")
+                 .agg(avg_price=("ImbalancePrice","mean"),
+                      peak=("ImbalancePrice","max"),
+                      low=("ImbalancePrice","min"),
+                      avg_niv=("NetImbalanceVolume","mean"))
+                 .reset_index())
+        daily.columns = ["Date","Avg Price","Peak","Low","Avg NIV"]
+
+        daily["NIV Flips"] = [
+            count_niv_flips(imb_h[imb_h["Date"] == d]["NetImbalanceVolume"])
+            for d in daily["Date"]
+        ]
+        daily["Price Trend"] = [
+            imb_h[imb_h["Date"] == d]
+            .set_index("StartTime")["ImbalancePrice"]
+            .resample("1h").mean().tolist()
+            for d in daily["Date"]
+        ]
+
+        max_flips = max(int(daily["NIV Flips"].max()), 1)
+        st.dataframe(
+            daily.sort_values("Date", ascending=False),
+            use_container_width=True, hide_index=True,
+            column_config={
+                "Date": st.column_config.DateColumn("Date", format="DD MMM YYYY", width="small"),
+                "Avg Price": st.column_config.NumberColumn("Avg (€/MWh)", format="€%.2f", width="small"),
+                "Peak": st.column_config.NumberColumn("Peak (€/MWh)", format="€%.2f", width="small"),
+                "Low": st.column_config.NumberColumn("Low (€/MWh)", format="€%.2f", width="small"),
+                "NIV Flips": st.column_config.ProgressColumn(
+                    "NIV Flips", format="%d", min_value=0, max_value=max_flips, width="medium"),
+                "Avg NIV": st.column_config.NumberColumn("Avg NIV (MWh)", format="%.1f MWh", width="small"),
+                "Price Trend": st.column_config.LineChartColumn(
+                    "Price Trend (Hourly)", width="large"),
+            },
+        )
+        st.download_button("↓  Export Daily Summary", data=daily.drop(columns=["Price Trend"]).to_csv(index=False),
+                           file_name=f"daily_summary_{start_str}_{end_str}.csv", mime="text/csv")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# TAB 3 — STATISTICAL EDGE
+# ════════════════════════════════════════════════════════════════════════════
+with tab3:
+    with st.spinner("Loading…"):
+        imb_s = fetch_imbalance(start_str, end_str)
+
+    if imb_s.empty:
+        st.warning("No data for the selected period.")
+    else:
+        col1, col2 = st.columns(2)
+
+        # ── Price Distribution Histogram ──
+        with col1:
+            prices = imb_s["ImbalancePrice"].dropna()
+            mu, sigma = prices.mean(), prices.std()
+            x_fit   = np.linspace(prices.min(), prices.max(), 200)
+            y_fit   = ((1 / (sigma * np.sqrt(2 * np.pi)))
+                       * np.exp(-0.5 * ((x_fit - mu) / sigma) ** 2))
+            bin_w   = (prices.max() - prices.min()) / 50
+            y_scale = y_fit * len(prices) * bin_w
+
+            sbp_p = imb_s[imb_s["NetImbalanceVolume"] < 0]["ImbalancePrice"].dropna()
+            ssp_p = imb_s[imb_s["NetImbalanceVolume"] >= 0]["ImbalancePrice"].dropna()
+
+            hfig = go.Figure()
+            if not sbp_p.empty:
+                hfig.add_trace(go.Histogram(x=sbp_p, nbinsx=50, name="SBP (Short)",
+                                            marker_color="#FF4B4B", opacity=0.7,
+                                            hovertemplate="€%{x:.2f}<br>Count: %{y}<extra>SBP</extra>"))
+            if not ssp_p.empty:
+                hfig.add_trace(go.Histogram(x=ssp_p, nbinsx=50, name="SSP (Long)",
+                                            marker_color="#00D4FF", opacity=0.7,
+                                            hovertemplate="€%{x:.2f}<br>Count: %{y}<extra>SSP</extra>"))
+            hfig.add_trace(go.Scatter(x=x_fit, y=y_scale, mode="lines",
+                                      name=f"Normal (μ=€{mu:.1f})",
+                                      line=dict(color="#00FF41", width=2, dash="dot")))
+            hfig.add_vline(x=mu, line_width=1, line_dash="dash", line_color="#00FF41",
+                           annotation_text=f"μ €{mu:.2f}",
+                           annotation_font=dict(color="#00FF41", size=10))
+            hfig.add_vline(x=float(np.median(prices)), line_width=1, line_dash="dot",
+                           line_color="#f59e0b",
+                           annotation_text=f"Med €{np.median(prices):.2f}",
+                           annotation_font=dict(color="#f59e0b", size=10))
+            layout_h = dark_layout("PRICE DISTRIBUTION  ·  SBP vs SSP", height=360)
+            layout_h["barmode"] = "overlay"
+            layout_h["xaxis"]["title"] = dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))
+            layout_h["yaxis"]["title"] = dict(text="Frequency", font=dict(size=10, color="#8B949E"))
+            hfig.update_layout(**layout_h)
+            st.plotly_chart(hfig, use_container_width=True, config={"displayModeBar": False})
+
+        # ── NIV Flip Frequency ──
+        with col2:
+            imb_s["Date"] = imb_s["StartTime"].dt.date
+            flip_data = pd.DataFrame({
+                "Date": imb_s["Date"].unique(),
+            })
+            flip_data["NIV Flips"] = [
+                count_niv_flips(imb_s[imb_s["Date"] == d]["NetImbalanceVolume"])
+                for d in flip_data["Date"]
+            ]
+            flip_data = flip_data.sort_values("Date")
+            med_flips = flip_data["NIV Flips"].median()
+
+            q75 = flip_data["NIV Flips"].quantile(0.75)
+            flip_colors = flip_data["NIV Flips"].apply(
+                lambda v: "#FF4B4B" if v > q75 else
+                          "#f59e0b" if v > med_flips else "#00D4FF"
+            )
+            ffig = go.Figure()
+            ffig.add_trace(go.Bar(
+                x=flip_data["Date"].astype(str),
+                y=flip_data["NIV Flips"],
+                marker_color=flip_colors,
+                hovertemplate="<b>%{x}</b><br>%{y} NIV flips<extra></extra>",
+                name="NIV Flips",
+            ))
+            ffig.add_hline(y=med_flips, line_width=1, line_dash="dash",
+                           line_color="#8B949E",
+                           annotation_text=f"Median {med_flips:.0f}",
+                           annotation_font=dict(color="#8B949E", size=10))
+            layout_f = dark_layout("NIV DIRECTION CHANGES / DAY  ·  System Uncertainty", height=360)
+            layout_f["yaxis"]["title"] = dict(text="Flips", font=dict(size=10, color="#8B949E"))
+            ffig.update_layout(**layout_f)
+            st.plotly_chart(ffig, use_container_width=True, config={"displayModeBar": False})
+
+        # ── Intraday Hourly Profile (Box plots) ──
+        imb_s["Hour"] = imb_s["StartTime"].dt.hour
+        bfig = go.Figure()
+        for hr in range(24):
+            d = imb_s[imb_s["Hour"] == hr]["ImbalancePrice"].dropna()
+            if not d.empty:
+                bfig.add_trace(go.Box(
+                    y=d, name=f"{hr:02d}:00",
+                    marker_color="#00D4FF", line=dict(color="#00D4FF"),
+                    fillcolor="rgba(0,212,255,0.15)",
+                    boxmean="sd", showlegend=False,
+                    hovertemplate=f"<b>{hr:02d}:00</b><br>€%{{y:.2f}}/MWh<extra></extra>",
+                ))
+        layout_b = dark_layout("INTRADAY PRICE PROFILE  ·  HOURLY DISTRIBUTION", height=360)
+        layout_b["xaxis"]["title"] = dict(text="Hour of Day", font=dict(size=10, color="#8B949E"))
+        layout_b["yaxis"]["title"] = dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))
+        layout_b["xaxis"]["showspikes"] = False
+        bfig.update_layout(**layout_b)
+        st.plotly_chart(bfig, use_container_width=True, config={"displayModeBar": False})
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # TAB 4 — AURORA
-# ─────────────────────────────────────────────────────────────────────────────
-with tab_aurora:
-    st.markdown("""
-    <div style="
-        background:white;
-        border:1px solid #e2e8f0;
-        border-radius:12px;
-        padding:40px 48px;
-        text-align:center;
-        box-shadow:0 1px 4px rgba(15,23,42,0.05);
-        margin-top:1rem;
-    ">
-        <div style="
-            width:56px;height:56px;border-radius:14px;
-            background:linear-gradient(135deg,#7c3aed,#4f46e5);
-            display:inline-flex;align-items:center;justify-content:center;
-            font-size:26px;margin-bottom:20px;
-        ">🌐</div>
-        <h2 style="margin:0 0 8px;font-size:20px;font-weight:700;color:#0f172a">
+# ════════════════════════════════════════════════════════════════════════════
+with tab4:
+    logo_part = (f'<img src="data:image/png;base64,{LOGO}" '
+                 f'style="height:40px;background:white;border-radius:6px;'
+                 f'padding:4px 8px;margin-bottom:16px">') if LOGO else ""
+    st.markdown(f"""
+    <div style="background:#1E1E1E;border:1px solid #30363D;border-radius:12px;
+                padding:48px;text-align:center;margin-top:1rem">
+        {logo_part}
+        <p style="margin:0 0 6px;font-size:10px;font-weight:600;color:#8B949E;
+                  text-transform:uppercase;letter-spacing:0.12em">Coming Soon</p>
+        <h2 style="margin:0 0 10px;font-size:22px;font-weight:700;color:#E6EDF3">
             Aurora Energy Research
         </h2>
-        <p style="margin:0 0 24px;font-size:14px;color:#64748b;max-width:480px;margin-left:auto;margin-right:auto">
-            Merchant curve integration in development. Once connected, this tab will
-            display forward price curves, scenario analysis, and Aurora forecasts
-            alongside SEMO actuals.
+        <p style="margin:0 0 28px;font-size:13px;color:#8B949E;
+                  max-width:480px;margin-left:auto;margin-right:auto">
+            Merchant curve integration in development. Once connected, Aurora
+            forward price curves will overlay directly on SEMO actuals for
+            scenario analysis and model inputs.
         </p>
         <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
-            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 20px;min-width:160px">
-                <p style="margin:0;font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:0.07em">Planned</p>
-                <p style="margin:6px 0 0;font-size:13px;color:#0f172a;font-weight:500">Forward Price Curves</p>
-            </div>
-            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 20px;min-width:160px">
-                <p style="margin:0;font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:0.07em">Planned</p>
-                <p style="margin:6px 0 0;font-size:13px;color:#0f172a;font-weight:500">Forecast vs Actual</p>
-            </div>
-            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 20px;min-width:160px">
-                <p style="margin:0;font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:0.07em">Planned</p>
-                <p style="margin:6px 0 0;font-size:13px;color:#0f172a;font-weight:500">Scenario Analysis</p>
-            </div>
+            {"".join(f'''<div style="background:#161B22;border:1px solid #30363D;border-radius:8px;
+                padding:12px 20px;min-width:150px">
+                <p style="margin:0;font-size:10px;color:#8B949E;font-weight:600;
+                   text-transform:uppercase;letter-spacing:0.08em">Planned</p>
+                <p style="margin:6px 0 0;font-size:12px;color:#C9D1D9;font-weight:500">{f}</p>
+            </div>''' for f in ["Forward Price Curves","Forecast vs Actual","Scenario Analysis","Model Export"])}
         </div>
     </div>
     """, unsafe_allow_html=True)

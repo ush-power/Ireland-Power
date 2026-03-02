@@ -420,6 +420,18 @@ def dark_layout(title: str, height: int = 420) -> dict:
 
 
 # ============================================================================
+# DATE RANGE — session state (keeps slider + date inputs in sync)
+# ============================================================================
+_yesterday  = date.today() - timedelta(days=1)
+_data_start = date(2025, 1, 1)
+
+if "dr_from" not in st.session_state:
+    st.session_state["dr_from"] = _yesterday - timedelta(days=6)
+if "dr_to" not in st.session_state:
+    st.session_state["dr_to"] = _yesterday
+
+
+# ============================================================================
 # SIDEBAR
 # ============================================================================
 with st.sidebar:
@@ -440,26 +452,53 @@ with st.sidebar:
 
     st.divider()
 
-    st.markdown("""<p style="margin:0 0 10px;font-size:10px;font-weight:600;
+    st.markdown("""<p style="margin:0 0 8px;font-size:10px;font-weight:600;
     color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Select Date Range</p>""",
     unsafe_allow_html=True)
 
-    yesterday  = date.today() - timedelta(days=1)
-    data_start = date(2025, 1, 1)
+    yesterday  = _yesterday
+    data_start = _data_start
 
-    date_from, date_to = st.slider(
+    # ── Date input fields (precise entry) ──
+    col_f, col_t = st.columns(2)
+    inp_from = col_f.date_input(
+        "From", value=st.session_state["dr_from"],
+        min_value=data_start, max_value=yesterday,
+    )
+    inp_to = col_t.date_input(
+        "To", value=st.session_state["dr_to"],
+        min_value=data_start, max_value=yesterday,
+    )
+    if inp_from > inp_to:
+        inp_to = inp_from
+    if (inp_from, inp_to) != (st.session_state["dr_from"], st.session_state["dr_to"]):
+        st.session_state["dr_from"] = inp_from
+        st.session_state["dr_to"]   = inp_to
+        st.rerun()
+
+    # ── Slider (visual range selector) ──
+    st.markdown("<p style='margin:8px 0 2px;font-size:10px;color:#8B949E'>or drag to select</p>",
+                unsafe_allow_html=True)
+    slid_from, slid_to = st.slider(
         "Date range",
         min_value=data_start,
         max_value=yesterday,
-        value=(yesterday - timedelta(days=6), yesterday),
+        value=(st.session_state["dr_from"], st.session_state["dr_to"]),
         format="DD MMM YYYY",
         label_visibility="collapsed",
     )
+    if (slid_from, slid_to) != (st.session_state["dr_from"], st.session_state["dr_to"]):
+        st.session_state["dr_from"] = slid_from
+        st.session_state["dr_to"]   = slid_to
+        st.rerun()
+
+    date_from = st.session_state["dr_from"]
+    date_to   = st.session_state["dr_to"]
 
     days_sel = (date_to - date_from).days + 1
     st.markdown(f"""
     <div style="background:#0D1117;border:1px solid #2D4A6B;border-radius:8px;
-                padding:10px 14px;margin-top:10px">
+                padding:10px 14px;margin-top:6px">
         <p style="margin:0;font-size:11px;color:#8B949E;font-family:'JetBrains Mono',monospace">
             {date_from.strftime('%d %b %Y')} → {date_to.strftime('%d %b %Y')}
         </p>

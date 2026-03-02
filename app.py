@@ -37,14 +37,14 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
-/* ── Base ── */
+/* ── Base — dark navy, not pitch black ── */
 html, body, .stApp {
     font-family: 'Inter', -apple-system, sans-serif !important;
-    background-color: #0E1117 !important;
+    background-color: #0F1923 !important;
 }
-.stApp { background: #0E1117 !important; }
+.stApp { background: #0F1923 !important; }
 
-/* ── Hide Streamlit chrome (be specific — do NOT hide header as it holds the sidebar toggle) ── */
+/* ── Hide Streamlit chrome ── */
 #MainMenu { visibility: hidden !important; }
 footer { visibility: hidden !important; }
 .stDeployButton { display: none !important; }
@@ -52,12 +52,16 @@ footer { visibility: hidden !important; }
 [data-testid="stDecoration"] { display: none !important; }
 [data-testid="stStatusWidget"] { display: none !important; }
 
-/* ── Lock sidebar open ── */
+/* ── FUSE sidebar — always visible, hide collapse button ── */
 [data-testid="stSidebar"] {
     display: block !important;
     visibility: visible !important;
     transform: translateX(0) !important;
+    min-width: 265px !important;
+    max-width: 265px !important;
 }
+[data-testid="collapsedControl"] { display: none !important; }
+button[data-testid="baseButton-header"] { display: none !important; }
 
 /* ── Main content padding ── */
 .block-container {
@@ -67,27 +71,26 @@ footer { visibility: hidden !important; }
 
 /* ── Sidebar ── */
 [data-testid="stSidebar"] {
-    background: #161B22 !important;
-    border-right: 1px solid #30363D !important;
-    min-width: 260px !important;
+    background: #172032 !important;
+    border-right: 1px solid #2D4A6B !important;
 }
 [data-testid="stSidebar"] hr {
-    border-color: #30363D !important;
+    border-color: #2D4A6B !important;
     margin: 1rem 0 !important;
 }
 [data-testid="stSidebar"] p,
 [data-testid="stSidebar"] label,
 [data-testid="stSidebar"] span,
 [data-testid="stSidebar"] small,
-[data-testid="stSidebar"] .stCaption { color: #8B949E !important; }
+[data-testid="stSidebar"] .stCaption { color: #94A3B8 !important; }
 [data-testid="stSidebar"] h1,
 [data-testid="stSidebar"] h2,
-[data-testid="stSidebar"] h3 { color: #E6EDF3 !important; }
+[data-testid="stSidebar"] h3 { color: #E2E8F0 !important; }
 
 /* ── Tabs ── */
 .stTabs [data-baseweb="tab-list"] {
-    background: #161B22 !important;
-    border-bottom: 1px solid #30363D !important;
+    background: #172032 !important;
+    border-bottom: 1px solid #2D4A6B !important;
     gap: 0 !important;
     padding: 0 !important;
     border-radius: 8px 8px 0 0 !important;
@@ -101,12 +104,12 @@ footer { visibility: hidden !important; }
     height: 44px !important;
     font-size: 12px !important;
     font-weight: 600 !important;
-    color: #8B949E !important;
-    letter-spacing: 0.07em !important;
+    color: #94A3B8 !important;
+    letter-spacing: 0.06em !important;
     text-transform: uppercase !important;
 }
 .stTabs [aria-selected="true"] {
-    color: #E6EDF3 !important;
+    color: #F1F5F9 !important;
     border-bottom: 2px solid #FF4B4B !important;
 }
 .stTabs [data-baseweb="tab-panel"] {
@@ -116,8 +119,8 @@ footer { visibility: hidden !important; }
 
 /* ── Chart cards ── */
 [data-testid="stPlotlyChart"] {
-    background: #1E1E1E !important;
-    border: 1px solid #30363D !important;
+    background: #1E2D42 !important;
+    border: 1px solid #2D4A6B !important;
     border-radius: 12px !important;
     padding: 4px !important;
     box-shadow: 0 4px 24px rgba(0,0,0,0.5) !important;
@@ -125,18 +128,18 @@ footer { visibility: hidden !important; }
 
 /* ── Dataframe cards ── */
 [data-testid="stDataFrame"] {
-    background: #1E1E1E !important;
-    border: 1px solid #30363D !important;
+    background: #1E2D42 !important;
+    border: 1px solid #2D4A6B !important;
     border-radius: 12px !important;
     overflow: hidden !important;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.5) !important;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.3) !important;
 }
 
 /* ── Download button ── */
 .stDownloadButton > button {
     background: transparent !important;
-    color: #8B949E !important;
-    border: 1px solid #30363D !important;
+    color: #94A3B8 !important;
+    border: 1px solid #2D4A6B !important;
     border-radius: 6px !important;
     font-size: 11px !important;
     font-weight: 500 !important;
@@ -144,15 +147,15 @@ footer { visibility: hidden !important; }
     letter-spacing: 0.04em !important;
 }
 .stDownloadButton > button:hover {
-    border-color: #8B949E !important;
-    color: #E6EDF3 !important;
+    border-color: #94A3B8 !important;
+    color: #E2E8F0 !important;
 }
 
 /* ── Spinner ── */
 .stSpinner > div { border-top-color: #FF4B4B !important; }
 
 /* ── Divider ── */
-hr { border-color: #30363D !important; margin: 0.75rem 0 !important; }
+hr { border-color: #2D4A6B !important; margin: 0.75rem 0 !important; }
 
 /* ── Pulse animations ── */
 @keyframes pulse-red {
@@ -271,7 +274,7 @@ def dark_layout(title: str, height: int = 420) -> dict:
         ),
         hovermode="x unified",
         hoverlabel=dict(
-            bgcolor="#1C2128", bordercolor="#444",
+            bgcolor="#1E2D42", bordercolor="#444",
             font=dict(size=11, color="#E6EDF3",
                       family="'JetBrains Mono', monospace"),
         ),
@@ -327,7 +330,7 @@ with st.sidebar:
 
     days_sel = (date_to - date_from).days + 1
     st.markdown(f"""
-    <div style="background:#0D1117;border:1px solid #30363D;border-radius:8px;
+    <div style="background:#0D1117;border:1px solid #2D4A6B;border-radius:8px;
                 padding:10px 14px;margin-top:10px">
         <p style="margin:0;font-size:11px;color:#8B949E;font-family:'JetBrains Mono',monospace">
             {date_from.strftime('%d %b %Y')} → {date_to.strftime('%d %b %Y')}
@@ -379,8 +382,8 @@ logo_html = (f'<img src="data:image/png;base64,{LOGO}" '
 
 st.markdown(f"""
 <div style="
-    background:#161B22;
-    border:1px solid #30363D;
+    background:#172032;
+    border:1px solid #2D4A6B;
     border-radius:10px;
     padding:14px 20px;
     margin-bottom:18px;
@@ -458,8 +461,8 @@ with tab1:
         st.markdown(f"""
         <div style="display:flex;gap:10px;margin-bottom:18px;flex-wrap:wrap">
 
-          <div style="flex:1.6;min-width:200px;background:#1E1E1E;
-                      border:1px solid #30363D;border-top:2px solid {state_color};
+          <div style="flex:1.6;min-width:200px;background:#1E2D42;
+                      border:1px solid #2D4A6B;border-top:2px solid {state_color};
                       border-radius:10px;padding:14px 18px">
             <div style="display:flex;align-items:center;margin-bottom:5px">
               <span class="{dot_cls}"></span>
@@ -474,8 +477,8 @@ with tab1:
                         font-weight:600;letter-spacing:0.05em">{state_label}</div>
           </div>
 
-          <div style="flex:1;min-width:140px;background:#1E1E1E;
-                      border:1px solid #30363D;border-top:2px solid #30363D;
+          <div style="flex:1;min-width:140px;background:#1E2D42;
+                      border:1px solid #2D4A6B;border-top:2px solid #30363D;
                       border-radius:10px;padding:14px 18px">
             <p style="margin:0 0 5px;font-size:10px;font-weight:600;color:#8B949E;
                       text-transform:uppercase;letter-spacing:0.1em">24H Change</p>
@@ -484,8 +487,8 @@ with tab1:
             <p style="margin:5px 0 0;font-size:10px;color:#8B949E">vs 24h avg</p>
           </div>
 
-          <div style="flex:1;min-width:140px;background:#1E1E1E;
-                      border:1px solid #30363D;border-top:2px solid #FF4B4B;
+          <div style="flex:1;min-width:140px;background:#1E2D42;
+                      border:1px solid #2D4A6B;border-top:2px solid #FF4B4B;
                       border-radius:10px;padding:14px 18px">
             <p style="margin:0 0 5px;font-size:10px;font-weight:600;color:#8B949E;
                       text-transform:uppercase;letter-spacing:0.1em">Period Peak</p>
@@ -494,8 +497,8 @@ with tab1:
             <p style="margin:5px 0 0;font-size:10px;color:#8B949E">EUR / MWh</p>
           </div>
 
-          <div style="flex:1;min-width:140px;background:#1E1E1E;
-                      border:1px solid #30363D;border-top:2px solid #00D4FF;
+          <div style="flex:1;min-width:140px;background:#1E2D42;
+                      border:1px solid #2D4A6B;border-top:2px solid #00D4FF;
                       border-radius:10px;padding:14px 18px">
             <p style="margin:0 0 5px;font-size:10px;font-weight:600;color:#8B949E;
                       text-transform:uppercase;letter-spacing:0.1em">Period Average</p>
@@ -504,8 +507,8 @@ with tab1:
             <p style="margin:5px 0 0;font-size:10px;color:#8B949E">EUR / MWh</p>
           </div>
 
-          <div style="flex:1;min-width:140px;background:#1E1E1E;
-                      border:1px solid #30363D;border-top:2px solid #00FF41;
+          <div style="flex:1;min-width:140px;background:#1E2D42;
+                      border:1px solid #2D4A6B;border-top:2px solid #00FF41;
                       border-radius:10px;padding:14px 18px">
             <p style="margin:0 0 5px;font-size:10px;font-weight:600;color:#8B949E;
                       text-transform:uppercase;letter-spacing:0.1em">Latest NIV</p>
@@ -560,7 +563,7 @@ with tab1:
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
             font=dict(family="Inter", color="#C9D1D9", size=11),
             hovermode="x unified",
-            hoverlabel=dict(bgcolor="#1C2128", bordercolor="#444",
+            hoverlabel=dict(bgcolor="#1E2D42", bordercolor="#444",
                             font=dict(size=11, color="#E6EDF3",
                                       family="'JetBrains Mono',monospace")),
             legend=dict(bgcolor="rgba(22,27,34,0.9)", bordercolor="#30363D",
@@ -573,7 +576,7 @@ with tab1:
                        font=dict(size=12, color="#8B949E"), x=0.01),
             xaxis={**axis_style, "showticklabels": False},
             xaxis2={**axis_style,
-                    "rangeslider": dict(visible=True, bgcolor="#0D1117", thickness=0.04)},
+                    "rangeslider": dict(visible=True, bgcolor="#0F1923", thickness=0.04)},
             yaxis={**axis_style,
                    "title": dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))},
             yaxis2={**axis_style,
@@ -666,7 +669,7 @@ with tab2:
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                 font=dict(family="Inter", color="#C9D1D9", size=11),
                 hovermode="x unified",
-                hoverlabel=dict(bgcolor="#1C2128", bordercolor="#444",
+                hoverlabel=dict(bgcolor="#1E2D42", bordercolor="#444",
                                 font=dict(size=11, color="#E6EDF3",
                                           family="'JetBrains Mono',monospace")),
                 legend=dict(bgcolor="rgba(22,27,34,0.9)", bordercolor="#30363D",
@@ -678,7 +681,7 @@ with tab2:
                            font=dict(size=12, color="#8B949E"), x=0.01),
                 xaxis={**axis_s, "showticklabels": False},
                 xaxis2={**axis_s,
-                        "rangeslider": dict(visible=True, bgcolor="#0D1117", thickness=0.04)},
+                        "rangeslider": dict(visible=True, bgcolor="#0F1923", thickness=0.04)},
                 yaxis={**axis_s,
                        "title": dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))},
                 yaxis2={**axis_s,
@@ -873,7 +876,7 @@ with tab4:
                  f'style="height:40px;background:white;border-radius:6px;'
                  f'padding:4px 8px;margin-bottom:16px">') if LOGO else ""
     st.markdown(f"""
-    <div style="background:#1E1E1E;border:1px solid #30363D;border-radius:12px;
+    <div style="background:#1E2D42;border:1px solid #2D4A6B;border-radius:12px;
                 padding:48px;text-align:center;margin-top:1rem">
         {logo_part}
         <p style="margin:0 0 6px;font-size:10px;font-weight:600;color:#8B949E;
@@ -888,7 +891,7 @@ with tab4:
             scenario analysis and model inputs.
         </p>
         <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
-            {"".join(f'''<div style="background:#161B22;border:1px solid #30363D;border-radius:8px;
+            {"".join(f'''<div style="background:#172032;border:1px solid #2D4A6B;border-radius:8px;
                 padding:12px 20px;min-width:150px">
                 <p style="margin:0;font-size:10px;color:#8B949E;font-weight:600;
                    text-transform:uppercase;letter-spacing:0.08em">Planned</p>

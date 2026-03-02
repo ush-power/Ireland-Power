@@ -588,15 +588,15 @@ st.markdown(f"""
 # TABS
 # ============================================================================
 tab1, tab2, tab3, tab4 = st.tabs([
-    "  Live Monitor  ",
+    "  Market Monitor  ",
     "  Historical Analysis  ",
-    "  Statistical Edge  ",
+    "  Commercial Tools  ",
     "  Aurora  ",
 ])
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# TAB 1 — LIVE MONITOR
+# TAB 1 — MARKET MONITOR
 # ════════════════════════════════════════════════════════════════════════════
 with tab1:
     with st.spinner("Loading…"):
@@ -728,6 +728,45 @@ with tab1:
 
         </div>
         """, unsafe_allow_html=True)
+
+        # ── SBP / SSP Reference Panel ──
+        sbp_ivs   = imb_df[imb_df["NetImbalanceVolume"] < 0]["ImbalancePrice"]
+        ssp_ivs   = imb_df[imb_df["NetImbalanceVolume"] >= 0]["ImbalancePrice"]
+        pct_sbp_1 = (imb_df["NetImbalanceVolume"] < 0).mean() * 100
+        pct_ssp_1 = 100 - pct_sbp_1
+        sbp_avg_1 = float(sbp_ivs.mean()) if not sbp_ivs.empty else None
+        ssp_avg_1 = float(ssp_ivs.mean()) if not ssp_ivs.empty else None
+        dam_avg_1 = float(dam_df["Price"].mean()) if not dam_df.empty else None
+        spread_1  = avg - dam_avg_1 if dam_avg_1 is not None else None
+        sbp_avg_s = f"€{sbp_avg_1:.2f}/MWh" if sbp_avg_1 is not None else "—"
+        ssp_avg_s = f"€{ssp_avg_1:.2f}/MWh" if ssp_avg_1 is not None else "—"
+        dam_avg_s = f"€{dam_avg_1:.2f}" if dam_avg_1 is not None else "—"
+        spread_s  = (f'{"+" if (spread_1 or 0) >= 0 else ""}€{spread_1:.2f}/MWh vs DAM' if spread_1 is not None else "")
+        spread_col = "#FF4B4B" if (spread_1 or 0) > 5 else "#00CC33" if (spread_1 or 0) < -5 else "#94A3B8"
+        dam_card = (
+            f'<div style="flex:0.65;min-width:160px;background:#141F2E;border:1px solid #2D4A6B;border-left:3px solid #7c3aed;border-radius:8px;padding:11px 14px">'
+            f'<p style="margin:0;font-size:9px;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:0.1em">DAM Reference · Period Avg</p>'
+            f'<p style="margin:5px 0 0;font-size:22px;font-weight:700;color:#E6EDF3;font-family:JetBrains Mono,monospace">{dam_avg_s}</p>'
+            f'<p style="margin:2px 0 0;font-size:10px;color:{spread_col};font-family:JetBrains Mono,monospace">{spread_s}</p>'
+            f'<p style="margin:5px 0 0;font-size:11px;color:#8B949E">Day Ahead avg. Spread = basis risk for DA-linked PPA structures.</p>'
+            f'</div>'
+        ) if dam_avg_1 is not None else ""
+        ref_html = (
+            f'<div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">'
+            f'<div style="flex:1;min-width:210px;background:#1A0E0E;border:1px solid rgba(255,75,75,0.4);border-left:3px solid #FF4B4B;border-radius:8px;padding:11px 14px">'
+            f'<p style="margin:0;font-size:9px;font-weight:700;color:#FF4B4B;text-transform:uppercase;letter-spacing:0.1em">SBP · System Short &nbsp;·&nbsp; {pct_sbp_1:.0f}% of period &nbsp;·&nbsp; avg {sbp_avg_s}</p>'
+            f'<p style="margin:5px 0 0;font-size:11.5px;color:#94A3B8;line-height:1.55">Demand exceeds available generation. Assets producing <em>less</em> than nominated output settle at the System Buy Price. '
+            f'This is the more costly regime — treat high-SBP periods as downside risk in budget models.</p>'
+            f'</div>'
+            f'<div style="flex:1;min-width:210px;background:#0A1A1A;border:1px solid rgba(0,212,255,0.4);border-left:3px solid #00D4FF;border-radius:8px;padding:11px 14px">'
+            f'<p style="margin:0;font-size:9px;font-weight:700;color:#00D4FF;text-transform:uppercase;letter-spacing:0.1em">SSP · System Long &nbsp;·&nbsp; {pct_ssp_1:.0f}% of period &nbsp;·&nbsp; avg {ssp_avg_s}</p>'
+            f'<p style="margin:5px 0 0;font-size:11.5px;color:#94A3B8;line-height:1.55">Generation exceeds demand — typically high wind or low load. Surplus output settles at the System Sell Price, '
+            f'discounted below Day Ahead. This drives capture price discount for wind and solar portfolios.</p>'
+            f'</div>'
+            f'{dam_card}'
+            f'</div>'
+        )
+        st.markdown(ref_html, unsafe_allow_html=True)
 
         # ── Synced Price + Volume chart (shared x-axis) ──
         fig = make_subplots(
@@ -982,6 +1021,10 @@ with tab2:
             count_niv_flips(imb_h[imb_h["Date"] == d]["NetImbalanceVolume"])
             for d in daily["Date"]
         ]
+        daily["% Short"] = [
+            round((imb_h[imb_h["Date"] == d]["NetImbalanceVolume"] < 0).mean() * 100, 1)
+            for d in daily["Date"]
+        ]
         daily["Price Trend"] = [
             imb_h[imb_h["Date"] == d]
             .set_index("StartTime")["ImbalancePrice"]
@@ -998,6 +1041,8 @@ with tab2:
                 "Avg Price": st.column_config.NumberColumn("Avg (€/MWh)", format="€%.2f", width="small"),
                 "Peak": st.column_config.NumberColumn("Peak (€/MWh)", format="€%.2f", width="small"),
                 "Low": st.column_config.NumberColumn("Low (€/MWh)", format="€%.2f", width="small"),
+                "% Short": st.column_config.ProgressColumn(
+                    "% Short (SBP)", format="%.0f%%", min_value=0, max_value=100, width="small"),
                 "NIV Flips": st.column_config.ProgressColumn(
                     "NIV Flips", format="%d", min_value=0, max_value=max_flips, width="medium"),
                 "Avg NIV": st.column_config.NumberColumn("Avg NIV (MWh)", format="%.1f MWh", width="small"),
@@ -1010,92 +1055,191 @@ with tab2:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# TAB 3 — STATISTICAL EDGE
+# TAB 3 — COMMERCIAL TOOLS
 # ════════════════════════════════════════════════════════════════════════════
 with tab3:
     with st.spinner("Loading…"):
         imb_s = fetch_imbalance(start_str, end_str)
+        dam_s = fetch_dam(start_str, end_str)
 
     if imb_s.empty:
         st.warning("No data for the selected period.")
     else:
+        prices   = imb_s["ImbalancePrice"].dropna()
+        sbp_mask = imb_s["NetImbalanceVolume"] < 0
+        sbp_p    = imb_s[sbp_mask]["ImbalancePrice"].dropna()
+        ssp_p    = imb_s[~sbp_mask]["ImbalancePrice"].dropna()
+        mu_s     = float(prices.mean())
+        sig_s    = float(prices.std())
+        p10_s    = float(prices.quantile(0.10))
+        p25_s    = float(prices.quantile(0.25))
+        p50_s    = float(prices.quantile(0.50))
+        p75_s    = float(prices.quantile(0.75))
+        p90_s    = float(prices.quantile(0.90))
+        pct_sbp_s = sbp_mask.mean() * 100
+        pct_ssp_s = 100 - pct_sbp_s
+        sbp_avg_s2 = float(sbp_p.mean()) if not sbp_p.empty else None
+        ssp_avg_s2 = float(ssp_p.mean()) if not ssp_p.empty else None
+        dam_avg_s2 = float(dam_s["Price"].mean()) if not dam_s.empty else None
+        basis_s2   = mu_s - dam_avg_s2 if dam_avg_s2 is not None else None
+
+        # ── Section 1: PPA & Budget Price Reference ──
+        st.markdown('<p style="margin:0 0 10px;font-size:10px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">PPA &amp; Budget Price Reference — Period Percentiles</p>', unsafe_allow_html=True)
+        ppa_html = (
+            f'<div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap">'
+            f'<div style="flex:1;min-width:100px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid #00CC33;border-radius:8px;padding:11px 13px">'
+            f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">P10 · Low Case</p>'
+            f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:#00CC33;font-family:JetBrains Mono,monospace">€{p10_s:.2f}</p>'
+            f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">Use for upside scenario</p></div>'
+            f'<div style="flex:1;min-width:100px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid #94A3B8;border-radius:8px;padding:11px 13px">'
+            f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">P25</p>'
+            f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:#94A3B8;font-family:JetBrains Mono,monospace">€{p25_s:.2f}</p>'
+            f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">25th percentile</p></div>'
+            f'<div style="flex:1.25;min-width:120px;background:#1A2438;border:2px solid #00D4FF;border-top:3px solid #00D4FF;border-radius:8px;padding:11px 13px">'
+            f'<p style="margin:0;font-size:9px;font-weight:600;color:#00D4FF;text-transform:uppercase;letter-spacing:0.1em">P50 · Base Case</p>'
+            f'<p style="margin:5px 0 0;font-size:23px;font-weight:700;color:#00D4FF;font-family:JetBrains Mono,monospace">€{p50_s:.2f}</p>'
+            f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">Median — budget midpoint</p></div>'
+            f'<div style="flex:1;min-width:100px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid #F59E0B;border-radius:8px;padding:11px 13px">'
+            f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">P75</p>'
+            f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:#F59E0B;font-family:JetBrains Mono,monospace">€{p75_s:.2f}</p>'
+            f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">75th percentile</p></div>'
+            f'<div style="flex:1;min-width:100px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid #FF4B4B;border-radius:8px;padding:11px 13px">'
+            f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">P90 · Stress Test</p>'
+            f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:#FF4B4B;font-family:JetBrains Mono,monospace">€{p90_s:.2f}</p>'
+            f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">Downside stress scenario</p></div>'
+            f'</div>'
+            f'<p style="margin:4px 0 16px;font-size:10px;color:#444D56;font-style:italic">Price percentiles across all settlement intervals in the selected period. Use P50 as the central budget estimate; P90 as the downside / stress case for sensitivity analysis and PPA risk margin sizing.</p>'
+        )
+        st.markdown(ppa_html, unsafe_allow_html=True)
+
+        # ── Section 2: Regime Exposure ──
+        st.markdown('<p style="margin:0 0 10px;font-size:10px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Imbalance Regime Exposure</p>', unsafe_allow_html=True)
+        sbp_s2_str = f"€{sbp_avg_s2:.2f}/MWh" if sbp_avg_s2 is not None else "—"
+        ssp_s2_str = f"€{ssp_avg_s2:.2f}/MWh" if ssp_avg_s2 is not None else "—"
+        dam_s2_str = f"€{dam_avg_s2:.2f}" if dam_avg_s2 is not None else "—"
+        basis_col  = "#FF4B4B" if (basis_s2 or 0) > 5 else "#00CC33" if (basis_s2 or 0) < -5 else "#8B949E"
+        basis_str  = (f'{"+" if (basis_s2 or 0) >= 0 else ""}€{basis_s2:.2f}/MWh vs DAM' if basis_s2 is not None else "")
+        dam_exp_card = (
+            f'<div style="flex:0.75;min-width:180px;background:#141F2E;border:1px solid #2D4A6B;border-left:3px solid #7c3aed;border-radius:8px;padding:12px 15px">'
+            f'<p style="margin:0;font-size:9px;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:0.1em">Day Ahead Market · Period Avg</p>'
+            f'<p style="margin:5px 0 0;font-size:24px;font-weight:700;color:#E6EDF3;font-family:JetBrains Mono,monospace">{dam_s2_str}</p>'
+            f'<p style="margin:2px 0 0;font-size:10px;color:{basis_col};font-family:JetBrains Mono,monospace">{basis_str}</p>'
+            f'<p style="margin:6px 0 0;font-size:11px;color:#8B949E">PPA basis risk: the spread between imbalance settlement and the DA reference price determines the cost or benefit of a DA-indexed PPA during this period.</p>'
+            f'</div>'
+        ) if dam_avg_s2 is not None else ""
+        regime_html = (
+            f'<div style="display:flex;gap:10px;margin-bottom:6px;flex-wrap:wrap">'
+            f'<div style="flex:1;min-width:200px;background:#1A0E0E;border:1px solid rgba(255,75,75,0.35);border-left:3px solid #FF4B4B;border-radius:8px;padding:12px 15px">'
+            f'<p style="margin:0;font-size:9px;font-weight:700;color:#FF4B4B;text-transform:uppercase;letter-spacing:0.1em">SBP · System Short</p>'
+            f'<p style="margin:5px 0 0;font-size:28px;font-weight:700;color:#E6EDF3;font-family:JetBrains Mono,monospace">{pct_sbp_s:.0f}%</p>'
+            f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">of intervals &nbsp;·&nbsp; avg {sbp_s2_str}</p>'
+            f'<p style="margin:7px 0 0;font-size:11px;color:#94A3B8">Underperforming assets settle at SBP. High frequency signals elevated imbalance cost risk — factor into budget and PPA risk margin.</p>'
+            f'</div>'
+            f'<div style="flex:1;min-width:200px;background:#0A1A1A;border:1px solid rgba(0,212,255,0.35);border-left:3px solid #00D4FF;border-radius:8px;padding:12px 15px">'
+            f'<p style="margin:0;font-size:9px;font-weight:700;color:#00D4FF;text-transform:uppercase;letter-spacing:0.1em">SSP · System Long</p>'
+            f'<p style="margin:5px 0 0;font-size:28px;font-weight:700;color:#E6EDF3;font-family:JetBrains Mono,monospace">{pct_ssp_s:.0f}%</p>'
+            f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">of intervals &nbsp;·&nbsp; avg {ssp_s2_str}</p>'
+            f'<p style="margin:7px 0 0;font-size:11px;color:#94A3B8">Surplus generation settles at SSP, discounted vs Day Ahead. High frequency = lower capture price for wind and solar. Key input for PPA revenue modelling.</p>'
+            f'</div>'
+            f'{dam_exp_card}'
+            f'</div>'
+        )
+        st.markdown(regime_html, unsafe_allow_html=True)
+
+        # ── Budget Guidance Card ──
+        if basis_s2 is not None and basis_s2 > 10:
+            bg_msg = (f"Imbalance prices averaged €{basis_s2:.2f}/MWh <strong>above</strong> the Day Ahead Market (DAM: {dam_s2_str} vs Imbalance: €{mu_s:.2f}/MWh). "
+                      f"For DA-referenced PPAs, this spread represents the basis cost borne by the asset — real-time settlement was materially more expensive than the contracted reference. "
+                      f"Build this spread into the risk premium for any upcoming PPA pricing or renewal discussion.")
+            bg_col, bg_icon = "#FF4B4B", "⚠"
+        elif basis_s2 is not None and basis_s2 < -10:
+            bg_msg = (f"Imbalance prices averaged €{abs(basis_s2):.2f}/MWh <strong>below</strong> the Day Ahead Market (DAM: {dam_s2_str} vs Imbalance: €{mu_s:.2f}/MWh). "
+                      f"Favourable for DA-referenced PPA structures — real-time settlement was cheaper than the day-ahead reference. "
+                      f"Worth flagging in management account commentary as a period where market conditions supported portfolio revenue.")
+            bg_col, bg_icon = "#00CC33", "✓"
+        else:
+            sbp_budget_rng = f"€{p50_s:.2f} (P50) to €{p90_s:.2f} (P90)"
+            bg_msg = (f"Budget range for the period: {sbp_budget_rng}/MWh. "
+                      f"With {pct_sbp_s:.0f}% of intervals in SBP (avg {sbp_s2_str}) and {pct_ssp_s:.0f}% in SSP (avg {ssp_s2_str}), "
+                      f"a blended imbalance price of €{mu_s:.2f}/MWh is the appropriate central estimate for management account reporting. "
+                      f"Use P90 (€{p90_s:.2f}/MWh) as the downside stress assumption for CFO sign-off scenarios.")
+            bg_col, bg_icon = "#F59E0B", "■"
+
+        st.markdown(
+            f'<div style="background:#141F2E;border:1px solid #2D4A6B;border-left:3px solid {bg_col};border-radius:8px;padding:13px 16px;margin:10px 0 18px;display:flex;gap:12px;align-items:flex-start">'
+            f'<span style="font-size:14px;color:{bg_col};font-weight:700;margin-top:1px;flex-shrink:0">{bg_icon}</span>'
+            f'<div><p style="margin:0;font-size:10px;font-weight:600;color:{bg_col};text-transform:uppercase;letter-spacing:0.1em">Budget &amp; PPA Guidance</p>'
+            f'<p style="margin:4px 0 0;font-size:12.5px;color:#C9D1D9;line-height:1.65">{bg_msg}</p></div>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
+        # ── Section 3: Charts ──
         col1, col2 = st.columns(2)
 
-        # ── Price Distribution Histogram ──
         with col1:
-            prices = imb_s["ImbalancePrice"].dropna()
-            mu, sigma = prices.mean(), prices.std()
+            # Price Distribution — SBP vs SSP
             x_fit   = np.linspace(prices.min(), prices.max(), 200)
-            y_fit   = ((1 / (sigma * np.sqrt(2 * np.pi)))
-                       * np.exp(-0.5 * ((x_fit - mu) / sigma) ** 2))
+            y_fit   = ((1 / (sig_s * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x_fit - mu_s) / sig_s) ** 2))
             bin_w   = (prices.max() - prices.min()) / 50
             y_scale = y_fit * len(prices) * bin_w
-
-            sbp_p = imb_s[imb_s["NetImbalanceVolume"] < 0]["ImbalancePrice"].dropna()
-            ssp_p = imb_s[imb_s["NetImbalanceVolume"] >= 0]["ImbalancePrice"].dropna()
-
             hfig = go.Figure()
             if not sbp_p.empty:
-                hfig.add_trace(go.Histogram(x=sbp_p, nbinsx=50, name="SBP (Short)",
+                hfig.add_trace(go.Histogram(x=sbp_p, nbinsx=50, name="SBP · Short",
                                             marker_color="#FF4B4B", opacity=0.7,
                                             hovertemplate="€%{x:.2f}<br>Count: %{y}<extra>SBP</extra>"))
             if not ssp_p.empty:
-                hfig.add_trace(go.Histogram(x=ssp_p, nbinsx=50, name="SSP (Long)",
+                hfig.add_trace(go.Histogram(x=ssp_p, nbinsx=50, name="SSP · Long",
                                             marker_color="#00D4FF", opacity=0.7,
                                             hovertemplate="€%{x:.2f}<br>Count: %{y}<extra>SSP</extra>"))
             hfig.add_trace(go.Scatter(x=x_fit, y=y_scale, mode="lines",
-                                      name=f"Normal (μ=€{mu:.1f})",
+                                      name=f"Normal (μ=€{mu_s:.1f})",
                                       line=dict(color="#00FF41", width=2, dash="dot")))
-            hfig.add_vline(x=mu, line_width=1, line_dash="dash", line_color="#00FF41",
-                           annotation_text=f"μ €{mu:.2f}",
-                           annotation_font=dict(color="#00FF41", size=10))
-            hfig.add_vline(x=float(np.median(prices)), line_width=1, line_dash="dot",
-                           line_color="#f59e0b",
-                           annotation_text=f"Med €{np.median(prices):.2f}",
-                           annotation_font=dict(color="#f59e0b", size=10))
-            layout_h = dark_layout("PRICE DISTRIBUTION  ·  SBP vs SSP", height=360)
+            for pval, plabel, pcol in [(p50_s, "P50", "#00D4FF"), (p90_s, "P90", "#FF4B4B")]:
+                hfig.add_vline(x=pval, line_width=1, line_dash="dash", line_color=pcol,
+                               annotation_text=f"{plabel} €{pval:.2f}",
+                               annotation_font=dict(color=pcol, size=10))
+            layout_h = dark_layout("PRICE DISTRIBUTION  ·  SBP vs SSP  ·  PPA Risk Reference", height=360)
             layout_h["barmode"] = "overlay"
             layout_h["xaxis"]["title"] = dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))
             layout_h["yaxis"]["title"] = dict(text="Frequency", font=dict(size=10, color="#8B949E"))
             hfig.update_layout(**layout_h)
             st.plotly_chart(hfig, use_container_width=True, config={"displayModeBar": False})
 
-        # ── NIV Flip Frequency ──
         with col2:
+            # System Instability — NIV flip rate per day
             imb_s["Date"] = imb_s["StartTime"].dt.date
-            flip_data = pd.DataFrame({
-                "Date": imb_s["Date"].unique(),
-            })
+            flip_data = pd.DataFrame({"Date": sorted(imb_s["Date"].unique())})
             flip_data["NIV Flips"] = [
                 count_niv_flips(imb_s[imb_s["Date"] == d]["NetImbalanceVolume"])
                 for d in flip_data["Date"]
             ]
-            flip_data = flip_data.sort_values("Date")
             med_flips = flip_data["NIV Flips"].median()
-
-            q75 = flip_data["NIV Flips"].quantile(0.75)
+            q75_f = flip_data["NIV Flips"].quantile(0.75)
             flip_colors = flip_data["NIV Flips"].apply(
-                lambda v: "#FF4B4B" if v > q75 else
-                          "#f59e0b" if v > med_flips else "#00D4FF"
-            )
+                lambda v: "#FF4B4B" if v > q75_f else "#f59e0b" if v > med_flips else "#00D4FF"
+            ).tolist()
             ffig = go.Figure()
             ffig.add_trace(go.Bar(
-                x=flip_data["Date"].astype(str),
-                y=flip_data["NIV Flips"],
+                x=flip_data["Date"].astype(str), y=flip_data["NIV Flips"],
                 marker_color=flip_colors,
-                hovertemplate="<b>%{x}</b><br>%{y} NIV flips<extra></extra>",
+                hovertemplate="<b>%{x}</b><br>%{y} NIV direction changes<extra></extra>",
                 name="NIV Flips",
             ))
-            ffig.add_hline(y=med_flips, line_width=1, line_dash="dash",
-                           line_color="#8B949E",
+            ffig.add_hline(y=med_flips, line_width=1, line_dash="dash", line_color="#8B949E",
                            annotation_text=f"Median {med_flips:.0f}",
                            annotation_font=dict(color="#8B949E", size=10))
-            layout_f = dark_layout("NIV DIRECTION CHANGES / DAY  ·  System Uncertainty", height=360)
-            layout_f["yaxis"]["title"] = dict(text="Flips", font=dict(size=10, color="#8B949E"))
+            layout_f = dark_layout("SYSTEM INSTABILITY  ·  NIV Direction Changes / Day", height=360)
+            layout_f["yaxis"]["title"] = dict(text="Flips / Day", font=dict(size=10, color="#8B949E"))
             ffig.update_layout(**layout_f)
             st.plotly_chart(ffig, use_container_width=True, config={"displayModeBar": False})
 
-        # ── Intraday Hourly Profile (Box plots) ──
+        # ── Intraday Capture Price Profile ──
+        st.markdown(
+            '<p style="margin:4px 0 6px;font-size:10px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">'
+            'Intraday Price Profile &nbsp;·&nbsp; Capture Price Risk by Hour of Day</p>',
+            unsafe_allow_html=True
+        )
         imb_s["Hour"] = imb_s["StartTime"].dt.hour
         bfig = go.Figure()
         for hr in range(24):
@@ -1108,12 +1252,18 @@ with tab3:
                     boxmean="sd", showlegend=False,
                     hovertemplate=f"<b>{hr:02d}:00</b><br>€%{{y:.2f}}/MWh<extra></extra>",
                 ))
-        layout_b = dark_layout("INTRADAY PRICE PROFILE  ·  HOURLY DISTRIBUTION", height=360)
-        layout_b["xaxis"]["title"] = dict(text="Hour of Day", font=dict(size=10, color="#8B949E"))
+        layout_b = dark_layout("INTRADAY PRICE PROFILE  ·  HOURLY DISTRIBUTION  ·  Boxplot with σ", height=360)
+        layout_b["xaxis"]["title"] = dict(text="Hour of Day (Ireland Time)", font=dict(size=10, color="#8B949E"))
         layout_b["yaxis"]["title"] = dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))
         layout_b["xaxis"]["showspikes"] = False
         bfig.update_layout(**layout_b)
         st.plotly_chart(bfig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown(
+            '<p style="margin:0 0 4px;font-size:10px;color:#444D56;font-style:italic">'
+            'Hours with persistently elevated prices indicate when forecast errors are most costly for imbalance settlement. '
+            'Use this chart to inform time-of-day assumptions in PPA capture price analysis and operational scheduling discussions.</p>',
+            unsafe_allow_html=True
+        )
 
 
 # ════════════════════════════════════════════════════════════════════════════

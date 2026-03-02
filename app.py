@@ -1087,10 +1087,10 @@ with tab3:
         st.markdown('<p style="margin:0 0 10px;font-size:10px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">PPA &amp; Budget Price Reference — Period Percentiles</p>', unsafe_allow_html=True)
         ppa_html = (
             f'<div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap">'
-            f'<div style="flex:1;min-width:100px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid #00CC33;border-radius:8px;padding:11px 13px">'
-            f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">P10 · Low Case</p>'
-            f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:#00CC33;font-family:JetBrains Mono,monospace">€{p10_s:.2f}</p>'
-            f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">Use for upside scenario</p></div>'
+            f'<div style="flex:1;min-width:100px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid #FF4B4B;border-radius:8px;padding:11px 13px">'
+            f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">P10 · Low Price</p>'
+            f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:#FF4B4B;font-family:JetBrains Mono,monospace">€{p10_s:.2f}</p>'
+            f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">Revenue downside — stress test</p></div>'
             f'<div style="flex:1;min-width:100px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid #94A3B8;border-radius:8px;padding:11px 13px">'
             f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">P25</p>'
             f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:#94A3B8;font-family:JetBrains Mono,monospace">€{p25_s:.2f}</p>'
@@ -1103,12 +1103,12 @@ with tab3:
             f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">P75</p>'
             f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:#F59E0B;font-family:JetBrains Mono,monospace">€{p75_s:.2f}</p>'
             f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">75th percentile</p></div>'
-            f'<div style="flex:1;min-width:100px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid #FF4B4B;border-radius:8px;padding:11px 13px">'
-            f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">P90 · Stress Test</p>'
-            f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:#FF4B4B;font-family:JetBrains Mono,monospace">€{p90_s:.2f}</p>'
-            f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">Downside stress scenario</p></div>'
+            f'<div style="flex:1;min-width:100px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid #00CC33;border-radius:8px;padding:11px 13px">'
+            f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">P90 · High Price</p>'
+            f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:#00CC33;font-family:JetBrains Mono,monospace">€{p90_s:.2f}</p>'
+            f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">Revenue upside scenario</p></div>'
             f'</div>'
-            f'<p style="margin:4px 0 16px;font-size:10px;color:#444D56;font-style:italic">Price percentiles across all settlement intervals in the selected period. Use P50 as the central budget estimate; P90 as the downside / stress case for sensitivity analysis and PPA risk margin sizing.</p>'
+            f'<p style="margin:4px 0 16px;font-size:10px;color:#444D56;font-style:italic">Price percentiles across all settlement intervals in the selected period. As a seller, high prices are the revenue upside. Use P50 as the central budget estimate; P10 as the revenue downside / stress case for PPA floor pricing; P90 as the revenue upside for sensitivity analysis.</p>'
         )
         st.markdown(ppa_html, unsafe_allow_html=True)
 
@@ -1158,11 +1158,11 @@ with tab3:
                       f"Worth flagging in management account commentary as a period where market conditions supported portfolio revenue.")
             bg_col, bg_icon = "#00CC33", "✓"
         else:
-            sbp_budget_rng = f"€{p50_s:.2f} (P50) to €{p90_s:.2f} (P90)"
-            bg_msg = (f"Budget range for the period: {sbp_budget_rng}/MWh. "
+            sbp_budget_rng = f"€{p10_s:.2f} (P10) to €{p90_s:.2f} (P90)"
+            bg_msg = (f"Revenue price range for the period: {sbp_budget_rng}/MWh. "
                       f"With {pct_sbp_s:.0f}% of intervals in SBP (avg {sbp_s2_str}) and {pct_ssp_s:.0f}% in SSP (avg {ssp_s2_str}), "
                       f"a blended imbalance price of €{mu_s:.2f}/MWh is the appropriate central estimate for management account reporting. "
-                      f"Use P90 (€{p90_s:.2f}/MWh) as the downside stress assumption for CFO sign-off scenarios.")
+                      f"As a seller, use P10 (€{p10_s:.2f}/MWh) as the revenue downside / stress assumption for CFO sign-off scenarios, and P90 (€{p90_s:.2f}/MWh) as the revenue upside.")
             bg_col, bg_icon = "#F59E0B", "■"
 
         st.markdown(

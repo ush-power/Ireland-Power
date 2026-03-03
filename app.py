@@ -838,6 +838,14 @@ with tab1:
                 hovertemplate="<b>%{x|%d %b %H:%M}</b><br>€%{y:.2f}/MWh<extra>" + name + "</extra>",
             ), row=1, col=1)
 
+        if not dam_df.empty:
+            fig.add_trace(go.Scatter(
+                x=dam_df["StartTime"], y=dam_df["Price"],
+                mode="lines", name="DAM (Hourly)",
+                line=dict(color="#7c3aed", width=1.5, dash="dot"),
+                hovertemplate="<b>%{x|%d %b %H:%M}</b><br>€%{y:.2f}/MWh<extra>DAM</extra>",
+            ), row=1, col=1)
+
         vol_colors = imb_df["NetImbalanceVolume"].apply(
             lambda v: "#00CC33" if v >= 0 else "#FF4B4B"
         ).tolist()
@@ -1079,23 +1087,33 @@ with tab2:
             for d in daily["Date"]
         ]
 
+        if not dam_h.empty:
+            dam_h["Date"] = dam_h["StartTime"].dt.date
+            dam_daily = dam_h.groupby("Date")["Price"].mean().reset_index()
+            dam_daily.columns = ["Date", "DAM Avg"]
+            daily = daily.merge(dam_daily, on="Date", how="left")
+            daily["Basis"] = daily["Avg Price"] - daily["DAM Avg"]
+
         max_flips = max(int(daily["NIV Flips"].max()), 1)
+        col_cfg = {
+            "Date": st.column_config.DateColumn("Date", format="DD MMM YYYY", width="small"),
+            "Avg Price": st.column_config.NumberColumn("Imbalance Avg (€/MWh)", format="€%.2f", width="small"),
+            "Peak": st.column_config.NumberColumn("Peak (€/MWh)", format="€%.2f", width="small"),
+            "Low": st.column_config.NumberColumn("Low (€/MWh)", format="€%.2f", width="small"),
+            "% Short": st.column_config.ProgressColumn(
+                "% Short (SBP)", format="%.0f%%", min_value=0, max_value=100, width="small"),
+            "NIV Flips": st.column_config.ProgressColumn(
+                "NIV Flips", format="%d", min_value=0, max_value=max_flips, width="medium"),
+            "Avg NIV": st.column_config.NumberColumn("Avg NIV (MWh)", format="%.1f MWh", width="small"),
+            "Price Trend": st.column_config.LineChartColumn("Price Trend (Hourly)", width="large"),
+        }
+        if "DAM Avg" in daily.columns:
+            col_cfg["DAM Avg"] = st.column_config.NumberColumn("DAM Avg (€/MWh)", format="€%.2f", width="small")
+            col_cfg["Basis"] = st.column_config.NumberColumn("Basis vs DAM (€/MWh)", format="€%.2f", width="small")
         st.dataframe(
             daily.sort_values("Date", ascending=False),
             use_container_width=True, hide_index=True,
-            column_config={
-                "Date": st.column_config.DateColumn("Date", format="DD MMM YYYY", width="small"),
-                "Avg Price": st.column_config.NumberColumn("Avg (€/MWh)", format="€%.2f", width="small"),
-                "Peak": st.column_config.NumberColumn("Peak (€/MWh)", format="€%.2f", width="small"),
-                "Low": st.column_config.NumberColumn("Low (€/MWh)", format="€%.2f", width="small"),
-                "% Short": st.column_config.ProgressColumn(
-                    "% Short (SBP)", format="%.0f%%", min_value=0, max_value=100, width="small"),
-                "NIV Flips": st.column_config.ProgressColumn(
-                    "NIV Flips", format="%d", min_value=0, max_value=max_flips, width="medium"),
-                "Avg NIV": st.column_config.NumberColumn("Avg NIV (MWh)", format="%.1f MWh", width="small"),
-                "Price Trend": st.column_config.LineChartColumn(
-                    "Price Trend (Hourly)", width="large"),
-            },
+            column_config=col_cfg,
         )
         st.download_button("↓  Export Daily Summary", data=daily.drop(columns=["Price Trend"]).to_csv(index=False),
                            file_name=f"daily_summary_{start_str}_{end_str}.csv", mime="text/csv")
@@ -1221,6 +1239,50 @@ with tab3:
             unsafe_allow_html=True
         )
 
+        # ── Capture Price Analysis ──
+        if dam_avg_s2 is not None and dam_avg_s2 > 0:
+            capture_blend = mu_s     / dam_avg_s2 * 100
+            ssp_capture   = (ssp_avg_s2 / dam_avg_s2 * 100) if ssp_avg_s2 else None
+            sbp_premium   = (sbp_avg_s2 / dam_avg_s2 * 100) if sbp_avg_s2 else None
+
+            def _cap_col(pct):
+                return "#00CC33" if pct >= 95 else "#F59E0B" if pct >= 80 else "#FF4B4B"
+
+            blend_col = _cap_col(capture_blend)
+            ssp_col   = _cap_col(ssp_capture) if ssp_capture else "#8B949E"
+            sbp_col   = "#00CC33" if sbp_premium and sbp_premium >= 100 else "#F59E0B"
+
+            cap_html = (
+                f'<p style="margin:0 0 10px;font-size:10px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Capture Price Analysis &nbsp;·&nbsp; Imbalance vs Day Ahead</p>'
+                f'<div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap">'
+                f'<div style="flex:1;min-width:150px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid {blend_col};border-radius:8px;padding:12px 14px">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Blended Capture Rate</p>'
+                f'<p style="margin:5px 0 0;font-size:24px;font-weight:700;color:{blend_col};font-family:JetBrains Mono,monospace">{capture_blend:.1f}%</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">of DAM avg &nbsp;·&nbsp; Imbalance €{mu_s:.2f} vs DAM €{dam_avg_s2:.2f}</p>'
+                f'<p style="margin:7px 0 0;font-size:11px;color:#94A3B8">Blended settlement price as a % of the Day Ahead reference. For a seller, values above 100% mean imbalance revenue exceeded the DA benchmark.</p>'
+                f'</div>'
+            )
+            if ssp_capture is not None:
+                cap_html += (
+                    f'<div style="flex:1;min-width:150px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid {ssp_col};border-radius:8px;padding:12px 14px">'
+                    f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">SSP Capture Rate</p>'
+                    f'<p style="margin:5px 0 0;font-size:24px;font-weight:700;color:{ssp_col};font-family:JetBrains Mono,monospace">{ssp_capture:.1f}%</p>'
+                    f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">of DAM avg &nbsp;·&nbsp; SSP €{ssp_avg_s2:.2f} vs DAM €{dam_avg_s2:.2f}</p>'
+                    f'<p style="margin:7px 0 0;font-size:11px;color:#94A3B8">During system-long (SSP) intervals — common in high-wind periods — generation settles at a discount to DAM. This discount is the primary driver of capture price loss for wind and solar.</p>'
+                    f'</div>'
+                )
+            if sbp_premium is not None:
+                cap_html += (
+                    f'<div style="flex:1;min-width:150px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid {sbp_col};border-radius:8px;padding:12px 14px">'
+                    f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">SBP Premium Rate</p>'
+                    f'<p style="margin:5px 0 0;font-size:24px;font-weight:700;color:{sbp_col};font-family:JetBrains Mono,monospace">{sbp_premium:.1f}%</p>'
+                    f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">of DAM avg &nbsp;·&nbsp; SBP €{sbp_avg_s2:.2f} vs DAM €{dam_avg_s2:.2f}</p>'
+                    f'<p style="margin:7px 0 0;font-size:11px;color:#94A3B8">During system-short (SBP) intervals, settlement prices typically exceed DAM. For assets overperforming forecast during these windows this is a revenue upside; for underperformers it is a cost.</p>'
+                    f'</div>'
+                )
+            cap_html += f'</div><p style="margin:4px 0 18px;font-size:10px;color:#444D56;font-style:italic">Capture rates calculated using ENTSO-E Day Ahead prices for Ireland SEM vs SEMO imbalance settlement. Values below 100% indicate a discount to the DA reference; above 100% indicate a premium.</p>'
+            st.markdown(cap_html, unsafe_allow_html=True)
+
         # ── Section 3: Charts ──
         col1, col2 = st.columns(2)
 
@@ -1242,10 +1304,18 @@ with tab3:
             hfig.add_trace(go.Scatter(x=x_fit, y=y_scale, mode="lines",
                                       name=f"Normal (μ=€{mu_s:.1f})",
                                       line=dict(color="#00FF41", width=2, dash="dot")))
-            for pval, plabel, pcol in [(p50_s, "P50", "#00D4FF"), (p90_s, "P90", "#FF4B4B")]:
+            for pval, plabel, pcol in [
+                (p10_s, "P10", "#FF4B4B"),
+                (p50_s, "P50", "#00D4FF"),
+                (p90_s, "P90", "#00CC33"),
+            ]:
                 hfig.add_vline(x=pval, line_width=1, line_dash="dash", line_color=pcol,
                                annotation_text=f"{plabel} €{pval:.2f}",
                                annotation_font=dict(color=pcol, size=10))
+            if dam_avg_s2 is not None:
+                hfig.add_vline(x=dam_avg_s2, line_width=1.5, line_dash="dot", line_color="#7c3aed",
+                               annotation_text=f"DAM €{dam_avg_s2:.2f}",
+                               annotation_font=dict(color="#7c3aed", size=10))
             layout_h = dark_layout("PRICE DISTRIBUTION  ·  SBP vs SSP  ·  PPA Risk Reference", height=360)
             layout_h["barmode"] = "overlay"
             layout_h["xaxis"]["title"] = dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))
@@ -1299,16 +1369,30 @@ with tab3:
                     boxmean="sd", showlegend=False,
                     hovertemplate=f"<b>{hr:02d}:00</b><br>€%{{y:.2f}}/MWh<extra></extra>",
                 ))
-        layout_b = dark_layout("INTRADAY PRICE PROFILE  ·  HOURLY DISTRIBUTION  ·  Boxplot with σ", height=360)
-        layout_b["xaxis"]["title"] = dict(text="Hour of Day (Ireland Time)", font=dict(size=10, color="#8B949E"))
+        if not dam_s.empty:
+            dam_s_hr = dam_s.copy()
+            dam_s_hr["Hour"] = dam_s_hr["StartTime"].dt.hour
+            dam_hourly = dam_s_hr.groupby("Hour")["Price"].mean()
+            bfig.add_trace(go.Scatter(
+                x=[f"{hr:02d}:00" for hr in dam_hourly.index],
+                y=dam_hourly.values,
+                mode="lines+markers",
+                name="DAM Hourly Avg",
+                line=dict(color="#7c3aed", width=2),
+                marker=dict(size=5, color="#7c3aed"),
+                hovertemplate="<b>%{x}</b><br>DAM €%{y:.2f}/MWh<extra>DAM</extra>",
+            ))
+        layout_b = dark_layout("INTRADAY PRICE PROFILE  ·  Imbalance vs DAM by Hour  ·  Boxplot with σ", height=380)
+        layout_b["xaxis"]["title"] = dict(text="Hour of Day (UTC)", font=dict(size=10, color="#8B949E"))
         layout_b["yaxis"]["title"] = dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))
         layout_b["xaxis"]["showspikes"] = False
         bfig.update_layout(**layout_b)
         st.plotly_chart(bfig, use_container_width=True, config={"displayModeBar": False})
         st.markdown(
             '<p style="margin:0 0 4px;font-size:10px;color:#444D56;font-style:italic">'
-            'Hours with persistently elevated prices indicate when forecast errors are most costly for imbalance settlement. '
-            'Use this chart to inform time-of-day assumptions in PPA capture price analysis and operational scheduling discussions.</p>',
+            'Imbalance settlement distribution by hour (box plots) vs Day Ahead hourly avg (purple line). '
+            'Where imbalance boxes sit above the DAM line, real-time settlement exceeded the DA reference — a revenue upside for sellers. '
+            'Hours with wide boxes and high prices are the most impactful for PPA capture price assumptions.</p>',
             unsafe_allow_html=True
         )
 

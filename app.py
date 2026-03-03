@@ -1005,12 +1005,13 @@ with tab2:
         imb_h = fetch_imbalance(start_str, end_str)
         dam_h = fetch_dam(start_str, end_str)
 
-    if imb_h.empty:
+    if imb_h.empty and dam_h.empty:
         st.warning("No data for the selected period.")
     else:
-        col_a, col_b = st.columns([3, 2])
+        has_imb = not imb_h.empty
+        pivot   = None
 
-        with col_a:
+        if has_imb:
             # Auto-resample for readability
             if days_sel <= 7:
                 h2_rule, h2_vol_win, h2_label = "1h",  24,  "Hourly Avg"
@@ -1037,7 +1038,6 @@ with tab2:
             vfig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                                  vertical_spacing=0.03, row_heights=[0.6, 0.4])
 
-            # High/low range band for daily+ views
             if h2_rule == "1D":
                 vfig.add_trace(go.Scatter(
                     x=pd.concat([high_r["t"], low_r["t"].iloc[::-1]]),
@@ -1059,12 +1059,10 @@ with tab2:
                     dam_plot = (dam_h.set_index("StartTime")["Price"]
                                 .resample("1D").mean().reset_index())
                     dam_plot.columns = ["StartTime", "Price"]
-                    dam_mode = "lines"
-                    dam_marker = {}
+                    dam_mode, dam_marker = "lines", {}
                 else:
                     dam_plot = dam_h
-                    dam_mode = "lines+markers"
-                    dam_marker = dict(size=3)
+                    dam_mode, dam_marker = "lines+markers", dict(size=3)
                 vfig.add_trace(go.Scatter(
                     x=dam_plot["StartTime"], y=dam_plot["Price"],
                     mode=dam_mode, name="DAM Price",
@@ -1111,133 +1109,114 @@ with tab2:
             )
             st.plotly_chart(vfig, use_container_width=True, config={"displayModeBar": False})
 
-        with col_b:
-            # Hour-of-day heatmap
+            # Pre-compute imbalance heatmap pivot (rendered below DAM heatmap)
             imb_h2 = imb_h.copy()
             imb_h2["hour"] = imb_h2["StartTime"].dt.hour
             imb_h2["day"]  = imb_h2["StartTime"].dt.strftime("%d %b")
             pivot = (imb_h2.groupby(["day", "hour"])["ImbalancePrice"]
                      .mean().reset_index()
                      .pivot(index="day", columns="hour", values="ImbalancePrice"))
-            hfig = go.Figure(go.Heatmap(
-                z=pivot.values,
-                x=[f"{h:02d}:00" for h in pivot.columns],
-                y=list(pivot.index),
-                colorscale="RdYlGn_r",
-                colorbar=dict(title=dict(text="€/MWh", font=dict(color="#8B949E", size=10)),
-                              tickfont=dict(color="#8B949E", size=9), thickness=10),
-                hovertemplate="<b>%{y}  %{x}</b><br>€%{z:.2f}/MWh<extra></extra>",
-            ))
-            hfig.update_layout(**{
-                **dark_layout("PRICE HEATMAP  ·  HOUR × DAY",
-                              height=max(300, len(pivot) * 26 + 80)),
-                "xaxis": {**dark_layout("")["xaxis"], "showspikes": False,
-                          "tickangle": -45, "tickfont": dict(size=9, color="#8B949E")},
-                "yaxis": {**dark_layout("")["yaxis"], "showspikes": False,
-                          "tickfont": dict(size=9, color="#8B949E")},
-            })
-            st.plotly_chart(hfig, use_container_width=True, config={"displayModeBar": False})
 
-        # ── Chart Commentary ──
-        imb_avg_h  = float(imb_h["ImbalancePrice"].mean())
-        imb_std_h  = float(imb_h["ImbalancePrice"].std())
-        imb_cv_h   = imb_std_h / imb_avg_h * 100 if imb_avg_h > 0 else 0
-        n_pr       = len(price_r)
-        first_h    = float(price_r["p"].iloc[:max(n_pr // 2, 1)].mean())
-        second_h   = float(price_r["p"].iloc[max(n_pr // 2, 1):].mean()) if n_pr > 1 else first_h
-        trend_h    = ((second_h / first_h) - 1) * 100 if first_h > 0 else 0
-        vol_latest = float(roll_vol["vol"].dropna().iloc[-1]) if not roll_vol["vol"].dropna().empty else 0
-        vol_avg    = float(roll_vol["vol"].dropna().mean()) if not roll_vol["vol"].dropna().empty else 1
-        dam_avg_h2 = float(dam_h["Price"].mean()) if not dam_h.empty else None
-        basis_h    = imb_avg_h - dam_avg_h2 if dam_avg_h2 is not None else None
+            # ── Chart Commentary ──
+            imb_avg_h  = float(imb_h["ImbalancePrice"].mean())
+            imb_std_h  = float(imb_h["ImbalancePrice"].std())
+            imb_cv_h   = imb_std_h / imb_avg_h * 100 if imb_avg_h > 0 else 0
+            n_pr       = len(price_r)
+            first_h    = float(price_r["p"].iloc[:max(n_pr // 2, 1)].mean())
+            second_h   = float(price_r["p"].iloc[max(n_pr // 2, 1):].mean()) if n_pr > 1 else first_h
+            trend_h    = ((second_h / first_h) - 1) * 100 if first_h > 0 else 0
+            vol_latest = float(roll_vol["vol"].dropna().iloc[-1]) if not roll_vol["vol"].dropna().empty else 0
+            vol_avg    = float(roll_vol["vol"].dropna().mean()) if not roll_vol["vol"].dropna().empty else 1
+            dam_avg_h2 = float(dam_h["Price"].mean()) if not dam_h.empty else None
+            basis_h    = imb_avg_h - dam_avg_h2 if dam_avg_h2 is not None else None
 
-        hour_avgs = pivot.mean(axis=0)
-        peak_hr   = int(hour_avgs.idxmax())
-        cheap_hr  = int(hour_avgs.idxmin())
-        day_avgs  = pivot.mean(axis=1)
-        peak_day  = day_avgs.idxmax()
-        cheap_day = day_avgs.idxmin()
+            hour_avgs = pivot.mean(axis=0)
+            peak_hr   = int(hour_avgs.idxmax())
+            cheap_hr  = int(hour_avgs.idxmin())
+            day_avgs  = pivot.mean(axis=1)
+            peak_day  = day_avgs.idxmax()
+            cheap_day = day_avgs.idxmin()
 
-        chart_notes = []
+            chart_notes = []
 
-        # Price trend
-        if trend_h > 5:
-            chart_notes.append({"icon": "↗", "color": "#00CC33",
-                "text": (f"Prices trended <strong>upward</strong> over the period: the {h2_label.lower()} rose {trend_h:.1f}% "
-                         f"from €{first_h:.2f}/MWh in the first half to €{second_h:.2f}/MWh in the second half. "
-                         f"For a revenue budget, this directional move is favourable — settlement prices exceeded the period opening level. "
-                         f"If the trend persists, PPA floor price assumptions may need revisiting upward.")})
-        elif trend_h < -5:
-            chart_notes.append({"icon": "↘", "color": "#FF4B4B",
-                "text": (f"Prices trended <strong>downward</strong> over the period: the {h2_label.lower()} fell {abs(trend_h):.1f}% "
-                         f"from €{first_h:.2f}/MWh in the first half to €{second_h:.2f}/MWh in the second half. "
-                         f"Falling settlement prices compress revenue margins for merchant and DA-referenced assets. "
-                         f"Stress-test budget models against the second-half average (€{second_h:.2f}/MWh) as a near-term central case.")})
-        else:
-            chart_notes.append({"icon": "→", "color": "#8B949E",
-                "text": (f"Prices were broadly <strong>range-bound</strong> over the period (first-half avg €{first_h:.2f} vs "
-                         f"second-half avg €{second_h:.2f}/MWh, {trend_h:+.1f}%). "
-                         f"A flat price environment supports the reliability of the P50 budget estimate. "
-                         f"Management account forecasts for this period should be relatively close to the period mean of €{imb_avg_h:.2f}/MWh.")})
-
-        # Volatility
-        if vol_latest > vol_avg * 1.4:
-            chart_notes.append({"icon": "⚡", "color": "#FF4B4B",
-                "text": (f"Volatility is <strong>elevated at the end of the period</strong>: the rolling σ of €{vol_latest:.2f}/MWh "
-                         f"is significantly above the period average of €{vol_avg:.2f}/MWh. "
-                         f"Rising volatility increases the risk that budget point estimates diverge from actual settlement. "
-                         f"Widen uncertainty bands in any near-term forecasts and flag this to the CFO in management account commentary.")})
-        elif vol_latest < vol_avg * 0.6:
-            chart_notes.append({"icon": "≈", "color": "#00CC33",
-                "text": (f"Volatility has <strong>compressed toward the end of the period</strong>: rolling σ of €{vol_latest:.2f}/MWh "
-                         f"is well below the period average of €{vol_avg:.2f}/MWh. "
-                         f"Tighter price dispersion improves the predictability of imbalance settlement costs and supports "
-                         f"confidence in the P50 budget midpoint for near-term planning.")})
-        elif imb_cv_h > 60:
-            chart_notes.append({"icon": "〜", "color": "#F59E0B",
-                "text": (f"Overall price volatility is <strong>high</strong> for the period (CV {imb_cv_h:.0f}%, σ €{imb_std_h:.2f}/MWh). "
-                         f"Wide intraday swings are visible in the chart — budget models using a single flat rate for imbalance "
-                         f"costs will be imprecise. Use the P10–P90 range on the Commercial Tools tab for scenario-banded forecasting.")})
-
-        # Heatmap: peak and cheap hours
-        chart_notes.append({"icon": "⏱", "color": "#F59E0B",
-            "text": (f"The heatmap shows the most expensive average imbalance hour was <strong>{peak_hr:02d}:00</strong> "
-                     f"(avg €{hour_avgs[peak_hr]:.2f}/MWh) and the cheapest was <strong>{cheap_hr:02d}:00</strong> "
-                     f"(avg €{hour_avgs[cheap_hr]:.2f}/MWh). "
-                     f"<strong>{peak_day}</strong> was the highest-price day of the period; <strong>{cheap_day}</strong> was the lowest. "
-                     f"These intraday patterns are relevant for time-of-day PPA shaping assumptions and operational dispatch scheduling — "
-                     f"assets generating during peak hours capture materially more revenue per MWh.")})
-
-        # DAM basis
-        if basis_h is not None:
-            if basis_h > 10:
-                chart_notes.append({"icon": "↑", "color": "#FF4B4B",
-                    "text": (f"Imbalance prices averaged <strong>€{basis_h:.2f}/MWh above the Day Ahead Market</strong> "
-                             f"(Imbalance: €{imb_avg_h:.2f} vs DAM: €{dam_avg_h2:.2f}/MWh). "
-                             f"For DA-indexed PPAs, this positive basis represents additional revenue above the contracted reference. "
-                             f"This spread should be incorporated into PPA risk premium calculations for any upcoming contract review.")})
-            elif basis_h < -10:
-                chart_notes.append({"icon": "↓", "color": "#00CC33",
-                    "text": (f"Imbalance prices averaged <strong>€{abs(basis_h):.2f}/MWh below the Day Ahead Market</strong> "
-                             f"(Imbalance: €{imb_avg_h:.2f} vs DAM: €{dam_avg_h2:.2f}/MWh). "
-                             f"Assets with DA-indexed PPAs received more than the imbalance settlement price during this period. "
-                             f"This negative basis is typical in high-generation (SSP) conditions and is the primary driver of "
-                             f"capture price discount for wind and solar portfolios.")})
+            # Price trend
+            if trend_h > 5:
+                chart_notes.append({"icon": "↗", "color": "#00CC33",
+                    "text": (f"Prices trended <strong>upward</strong> over the period: the {h2_label.lower()} rose {trend_h:.1f}% "
+                             f"from €{first_h:.2f}/MWh in the first half to €{second_h:.2f}/MWh in the second half. "
+                             f"For a revenue budget, this directional move is favourable — settlement prices exceeded the period opening level. "
+                             f"If the trend persists, PPA floor price assumptions may need revisiting upward.")})
+            elif trend_h < -5:
+                chart_notes.append({"icon": "↘", "color": "#FF4B4B",
+                    "text": (f"Prices trended <strong>downward</strong> over the period: the {h2_label.lower()} fell {abs(trend_h):.1f}% "
+                             f"from €{first_h:.2f}/MWh in the first half to €{second_h:.2f}/MWh in the second half. "
+                             f"Falling settlement prices compress revenue margins for merchant and DA-referenced assets. "
+                             f"Stress-test budget models against the second-half average (€{second_h:.2f}/MWh) as a near-term central case.")})
             else:
-                chart_notes.append({"icon": "≈", "color": "#94A3B8",
-                    "text": (f"Imbalance and Day Ahead prices tracked closely: avg basis of {basis_h:+.2f} €/MWh "
-                             f"(Imbalance: €{imb_avg_h:.2f} vs DAM: €{dam_avg_h2:.2f}/MWh). "
-                             f"Low basis risk during this period reduces the PPA pricing adjustment needed for DA-indexed contracts. "
-                             f"This is a useful benchmark to reference when justifying tight basis assumptions in PPA negotiations.")})
+                chart_notes.append({"icon": "→", "color": "#8B949E",
+                    "text": (f"Prices were broadly <strong>range-bound</strong> over the period (first-half avg €{first_h:.2f} vs "
+                             f"second-half avg €{second_h:.2f}/MWh, {trend_h:+.1f}%). "
+                             f"A flat price environment supports the reliability of the P50 budget estimate. "
+                             f"Management account forecasts for this period should be relatively close to the period mean of €{imb_avg_h:.2f}/MWh.")})
 
-        notes_html = "".join(
-            f'<div style="display:flex;gap:14px;align-items:flex-start;padding:10px 0;border-bottom:1px solid rgba(45,74,107,0.4)">'
-            f'<span style="font-size:13px;color:{o["color"]};font-weight:700;min-width:20px;text-align:center;margin-top:2px;font-family:monospace">{o["icon"]}</span>'
-            f'<p style="margin:0;font-size:12.5px;color:#C9D1D9;line-height:1.65">{o["text"]}</p>'
-            f'</div>'
-            for o in chart_notes
-        )
-        st.markdown(f"""
+            # Volatility
+            if vol_latest > vol_avg * 1.4:
+                chart_notes.append({"icon": "⚡", "color": "#FF4B4B",
+                    "text": (f"Volatility is <strong>elevated at the end of the period</strong>: the rolling σ of €{vol_latest:.2f}/MWh "
+                             f"is significantly above the period average of €{vol_avg:.2f}/MWh. "
+                             f"Rising volatility increases the risk that budget point estimates diverge from actual settlement. "
+                             f"Widen uncertainty bands in any near-term forecasts and flag this to the CFO in management account commentary.")})
+            elif vol_latest < vol_avg * 0.6:
+                chart_notes.append({"icon": "≈", "color": "#00CC33",
+                    "text": (f"Volatility has <strong>compressed toward the end of the period</strong>: rolling σ of €{vol_latest:.2f}/MWh "
+                             f"is well below the period average of €{vol_avg:.2f}/MWh. "
+                             f"Tighter price dispersion improves the predictability of imbalance settlement costs and supports "
+                             f"confidence in the P50 budget midpoint for near-term planning.")})
+            elif imb_cv_h > 60:
+                chart_notes.append({"icon": "〜", "color": "#F59E0B",
+                    "text": (f"Overall price volatility is <strong>high</strong> for the period (CV {imb_cv_h:.0f}%, σ €{imb_std_h:.2f}/MWh). "
+                             f"Wide intraday swings are visible in the chart — budget models using a single flat rate for imbalance "
+                             f"costs will be imprecise. Use the P10–P90 range on the Commercial Tools tab for scenario-banded forecasting.")})
+
+            # Heatmap: peak and cheap hours
+            chart_notes.append({"icon": "⏱", "color": "#F59E0B",
+                "text": (f"The heatmap shows the most expensive average imbalance hour was <strong>{peak_hr:02d}:00</strong> "
+                         f"(avg €{hour_avgs[peak_hr]:.2f}/MWh) and the cheapest was <strong>{cheap_hr:02d}:00</strong> "
+                         f"(avg €{hour_avgs[cheap_hr]:.2f}/MWh). "
+                         f"<strong>{peak_day}</strong> was the highest-price day of the period; <strong>{cheap_day}</strong> was the lowest. "
+                         f"These intraday patterns are relevant for time-of-day PPA shaping assumptions and operational dispatch scheduling — "
+                         f"assets generating during peak hours capture materially more revenue per MWh.")})
+
+            # DAM basis
+            if basis_h is not None:
+                if basis_h > 10:
+                    chart_notes.append({"icon": "↑", "color": "#FF4B4B",
+                        "text": (f"Imbalance prices averaged <strong>€{basis_h:.2f}/MWh above the Day Ahead Market</strong> "
+                                 f"(Imbalance: €{imb_avg_h:.2f} vs DAM: €{dam_avg_h2:.2f}/MWh). "
+                                 f"For DA-indexed PPAs, this positive basis represents additional revenue above the contracted reference. "
+                                 f"This spread should be incorporated into PPA risk premium calculations for any upcoming contract review.")})
+                elif basis_h < -10:
+                    chart_notes.append({"icon": "↓", "color": "#00CC33",
+                        "text": (f"Imbalance prices averaged <strong>€{abs(basis_h):.2f}/MWh below the Day Ahead Market</strong> "
+                                 f"(Imbalance: €{imb_avg_h:.2f} vs DAM: €{dam_avg_h2:.2f}/MWh). "
+                                 f"Assets with DA-indexed PPAs received more than the imbalance settlement price during this period. "
+                                 f"This negative basis is typical in high-generation (SSP) conditions and is the primary driver of "
+                                 f"capture price discount for wind and solar portfolios.")})
+                else:
+                    chart_notes.append({"icon": "≈", "color": "#94A3B8",
+                        "text": (f"Imbalance and Day Ahead prices tracked closely: avg basis of {basis_h:+.2f} €/MWh "
+                                 f"(Imbalance: €{imb_avg_h:.2f} vs DAM: €{dam_avg_h2:.2f}/MWh). "
+                                 f"Low basis risk during this period reduces the PPA pricing adjustment needed for DA-indexed contracts. "
+                                 f"This is a useful benchmark to reference when justifying tight basis assumptions in PPA negotiations.")})
+
+            notes_html = "".join(
+                f'<div style="display:flex;gap:14px;align-items:flex-start;padding:10px 0;border-bottom:1px solid rgba(45,74,107,0.4)">'
+                f'<span style="font-size:13px;color:{o["color"]};font-weight:700;min-width:20px;text-align:center;margin-top:2px;font-family:monospace">{o["icon"]}</span>'
+                f'<p style="margin:0;font-size:12.5px;color:#C9D1D9;line-height:1.65">{o["text"]}</p>'
+                f'</div>'
+                for o in chart_notes
+            )
+            st.markdown(f"""
         <div style="background:#141F2E;border:1px solid #2D4A6B;border-top:2px solid #00D4FF;
                     border-radius:10px;padding:16px 20px;margin:14px 0 18px">
           <p style="margin:0 0 12px;font-size:10px;font-weight:600;color:#00D4FF;
@@ -1350,138 +1329,174 @@ with tab2:
                 "yaxis": {**dark_layout("")["yaxis"], "showspikes": False,
                           "tickfont": dict(size=9, color="#8B949E")},
             })
-            st.plotly_chart(dmfig, use_container_width=True, config={"displayModeBar": False})
-            st.markdown(
-                '<p style="margin:0 0 4px;font-size:10px;color:#444D56;font-style:italic">'
-                'Purple intensity = higher DAM price. Darker columns indicate persistently expensive hours; darker rows indicate high-price days. '
-                'Compare with the imbalance heatmap above to identify whether intraday DA and imbalance price shapes align.</p>',
-                unsafe_allow_html=True
+            col_hm1, col_hm2 = st.columns(2)
+            with col_hm1:
+                st.plotly_chart(dmfig, use_container_width=True, config={"displayModeBar": False})
+                st.markdown(
+                    '<p style="margin:0 0 4px;font-size:10px;color:#444D56;font-style:italic">'
+                    'Purple intensity = higher DAM price. Darker columns indicate persistently expensive hours; '
+                    'darker rows indicate high-price days.</p>',
+                    unsafe_allow_html=True
+                )
+            with col_hm2:
+                if pivot is not None and not pivot.empty:
+                    hfig = go.Figure(go.Heatmap(
+                        z=pivot.values,
+                        x=[f"{h:02d}:00" for h in pivot.columns],
+                        y=list(pivot.index),
+                        colorscale="RdYlGn_r",
+                        colorbar=dict(title=dict(text="€/MWh", font=dict(color="#8B949E", size=10)),
+                                      tickfont=dict(color="#8B949E", size=9), thickness=10),
+                        hovertemplate="<b>%{y}  %{x}</b><br>Imbalance €%{z:.2f}/MWh<extra></extra>",
+                    ))
+                    hfig.update_layout(**{
+                        **dark_layout("IMBALANCE PRICE HEATMAP  ·  HOUR × DAY",
+                                      height=max(280, len(pivot) * 26 + 80)),
+                        "xaxis": {**dark_layout("")["xaxis"], "showspikes": False,
+                                  "tickangle": -45, "tickfont": dict(size=9, color="#8B949E")},
+                        "yaxis": {**dark_layout("")["yaxis"], "showspikes": False,
+                                  "tickfont": dict(size=9, color="#8B949E")},
+                    })
+                    st.plotly_chart(hfig, use_container_width=True, config={"displayModeBar": False})
+                    st.markdown(
+                        '<p style="margin:0 0 4px;font-size:10px;color:#444D56;font-style:italic">'
+                        'Red = high imbalance price (system short); green = low. '
+                        'Compare with DAM heatmap to identify basis patterns by hour.</p>',
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.markdown(
+                        '<div style="display:flex;align-items:center;justify-content:center;height:200px;">'
+                        '<p style="color:#444D56;font-size:12px;text-align:center">'
+                        'No imbalance data available for comparison</p></div>',
+                        unsafe_allow_html=True
+                    )
+
+        if has_imb:
+            # ── Daily Summary ──
+            st.markdown("<p style='font-size:11px;font-weight:600;color:#8B949E;"
+                        "text-transform:uppercase;letter-spacing:0.1em;"
+                        "margin:16px 0 8px'>Daily Summary</p>", unsafe_allow_html=True)
+
+            imb_h["Date"] = imb_h["StartTime"].dt.date
+            daily = (imb_h.groupby("Date")
+                     .agg(avg_price=("ImbalancePrice","mean"),
+                          peak=("ImbalancePrice","max"),
+                          low=("ImbalancePrice","min"),
+                          avg_niv=("NetImbalanceVolume","mean"))
+                     .reset_index())
+            daily.columns = ["Date","Avg Price","Peak","Low","Avg NIV"]
+
+            daily["NIV Flips"] = [
+                count_niv_flips(imb_h[imb_h["Date"] == d]["NetImbalanceVolume"])
+                for d in daily["Date"]
+            ]
+            daily["% Short"] = [
+                round((imb_h[imb_h["Date"] == d]["NetImbalanceVolume"] < 0).mean() * 100, 1)
+                for d in daily["Date"]
+            ]
+            daily["Price Trend"] = [
+                imb_h[imb_h["Date"] == d]
+                .set_index("StartTime")["ImbalancePrice"]
+                .resample("1h").mean().tolist()
+                for d in daily["Date"]
+            ]
+
+            if not dam_h.empty:
+                dam_h["Date"] = dam_h["StartTime"].dt.date
+                dam_daily = dam_h.groupby("Date")["Price"].mean().reset_index()
+                dam_daily.columns = ["Date", "DAM Avg"]
+                daily = daily.merge(dam_daily, on="Date", how="left")
+                daily["Basis"] = daily["Avg Price"] - daily["DAM Avg"]
+
+            max_flips = max(int(daily["NIV Flips"].max()), 1)
+            col_cfg = {
+                "Date": st.column_config.DateColumn("Date", format="DD MMM YYYY", width="small"),
+                "Avg Price": st.column_config.NumberColumn("Imbalance Avg (€/MWh)", format="€%.2f", width="small"),
+                "Peak": st.column_config.NumberColumn("Peak (€/MWh)", format="€%.2f", width="small"),
+                "Low": st.column_config.NumberColumn("Low (€/MWh)", format="€%.2f", width="small"),
+                "% Short": st.column_config.ProgressColumn(
+                    "% Short (SBP)", format="%.0f%%", min_value=0, max_value=100, width="small"),
+                "NIV Flips": st.column_config.ProgressColumn(
+                    "NIV Flips", format="%d", min_value=0, max_value=max_flips, width="medium"),
+                "Avg NIV": st.column_config.NumberColumn("Avg NIV (MWh)", format="%.1f MWh", width="small"),
+                "Price Trend": st.column_config.LineChartColumn("Price Trend (Hourly)", width="large"),
+            }
+            if "DAM Avg" in daily.columns:
+                col_cfg["DAM Avg"] = st.column_config.NumberColumn("DAM Avg (€/MWh)", format="€%.2f", width="small")
+                col_cfg["Basis"] = st.column_config.NumberColumn("Basis vs DAM (€/MWh)", format="€%.2f", width="small")
+            st.dataframe(
+                daily.sort_values("Date", ascending=False),
+                use_container_width=True, hide_index=True,
+                column_config=col_cfg,
             )
+            st.download_button("↓  Export Daily Summary", data=daily.drop(columns=["Price Trend"]).to_csv(index=False),
+                               file_name=f"daily_summary_{start_str}_{end_str}.csv", mime="text/csv")
 
-        # Daily summary table with sparklines
-        st.markdown("<p style='font-size:11px;font-weight:600;color:#8B949E;"
-                    "text-transform:uppercase;letter-spacing:0.1em;"
-                    "margin:16px 0 8px'>Daily Summary</p>", unsafe_allow_html=True)
+            # ── DAM vs Imbalance Basis Spread ──
+            if not dam_h.empty and "DAM Avg" in daily.columns:
+                basis_df = daily[daily["DAM Avg"].notna()].copy()
+                basis_df["Date"] = pd.to_datetime(basis_df["Date"])
+                b_colors = ["#00CC33" if b >= 0 else "#FF4B4B" for b in basis_df["Basis"]]
 
-        imb_h["Date"] = imb_h["StartTime"].dt.date
-        daily = (imb_h.groupby("Date")
-                 .agg(avg_price=("ImbalancePrice","mean"),
-                      peak=("ImbalancePrice","max"),
-                      low=("ImbalancePrice","min"),
-                      avg_niv=("NetImbalanceVolume","mean"))
-                 .reset_index())
-        daily.columns = ["Date","Avg Price","Peak","Low","Avg NIV"]
+                bsfig = make_subplots(
+                    rows=2, cols=1, shared_xaxes=True,
+                    vertical_spacing=0.04, row_heights=[0.58, 0.42],
+                )
+                bsfig.add_trace(go.Scatter(
+                    x=basis_df["Date"], y=basis_df["Avg Price"],
+                    mode="lines+markers", name="Imbalance Avg",
+                    line=dict(color="#00D4FF", width=2),
+                    marker=dict(size=4),
+                    hovertemplate="<b>%{x|%d %b}</b><br>Imbalance €%{y:.2f}/MWh<extra></extra>",
+                ), row=1, col=1)
+                bsfig.add_trace(go.Scatter(
+                    x=basis_df["Date"], y=basis_df["DAM Avg"],
+                    mode="lines+markers", name="DAM Avg",
+                    line=dict(color="#7c3aed", width=2),
+                    marker=dict(size=4),
+                    hovertemplate="<b>%{x|%d %b}</b><br>DAM €%{y:.2f}/MWh<extra>DAM</extra>",
+                ), row=1, col=1)
+                bsfig.add_trace(go.Bar(
+                    x=basis_df["Date"], y=basis_df["Basis"],
+                    name="Basis (Imb − DAM)",
+                    marker_color=b_colors,
+                    hovertemplate="<b>%{x|%d %b}</b><br>Basis %{y:+.2f} €/MWh<extra></extra>",
+                ), row=2, col=1)
+                bsfig.add_hline(y=0, line_width=1, line_color="#444D56", row=2, col=1)
 
-        daily["NIV Flips"] = [
-            count_niv_flips(imb_h[imb_h["Date"] == d]["NetImbalanceVolume"])
-            for d in daily["Date"]
-        ]
-        daily["% Short"] = [
-            round((imb_h[imb_h["Date"] == d]["NetImbalanceVolume"] < 0).mean() * 100, 1)
-            for d in daily["Date"]
-        ]
-        daily["Price Trend"] = [
-            imb_h[imb_h["Date"] == d]
-            .set_index("StartTime")["ImbalancePrice"]
-            .resample("1h").mean().tolist()
-            for d in daily["Date"]
-        ]
-
-        if not dam_h.empty:
-            dam_h["Date"] = dam_h["StartTime"].dt.date
-            dam_daily = dam_h.groupby("Date")["Price"].mean().reset_index()
-            dam_daily.columns = ["Date", "DAM Avg"]
-            daily = daily.merge(dam_daily, on="Date", how="left")
-            daily["Basis"] = daily["Avg Price"] - daily["DAM Avg"]
-
-        max_flips = max(int(daily["NIV Flips"].max()), 1)
-        col_cfg = {
-            "Date": st.column_config.DateColumn("Date", format="DD MMM YYYY", width="small"),
-            "Avg Price": st.column_config.NumberColumn("Imbalance Avg (€/MWh)", format="€%.2f", width="small"),
-            "Peak": st.column_config.NumberColumn("Peak (€/MWh)", format="€%.2f", width="small"),
-            "Low": st.column_config.NumberColumn("Low (€/MWh)", format="€%.2f", width="small"),
-            "% Short": st.column_config.ProgressColumn(
-                "% Short (SBP)", format="%.0f%%", min_value=0, max_value=100, width="small"),
-            "NIV Flips": st.column_config.ProgressColumn(
-                "NIV Flips", format="%d", min_value=0, max_value=max_flips, width="medium"),
-            "Avg NIV": st.column_config.NumberColumn("Avg NIV (MWh)", format="%.1f MWh", width="small"),
-            "Price Trend": st.column_config.LineChartColumn("Price Trend (Hourly)", width="large"),
-        }
-        if "DAM Avg" in daily.columns:
-            col_cfg["DAM Avg"] = st.column_config.NumberColumn("DAM Avg (€/MWh)", format="€%.2f", width="small")
-            col_cfg["Basis"] = st.column_config.NumberColumn("Basis vs DAM (€/MWh)", format="€%.2f", width="small")
-        st.dataframe(
-            daily.sort_values("Date", ascending=False),
-            use_container_width=True, hide_index=True,
-            column_config=col_cfg,
-        )
-        st.download_button("↓  Export Daily Summary", data=daily.drop(columns=["Price Trend"]).to_csv(index=False),
-                           file_name=f"daily_summary_{start_str}_{end_str}.csv", mime="text/csv")
-
-        # ── DAM vs Imbalance Basis Spread ──
-        if not dam_h.empty and "DAM Avg" in daily.columns:
-            basis_df = daily[daily["DAM Avg"].notna()].copy()
-            basis_df["Date"] = pd.to_datetime(basis_df["Date"])
-            b_colors = ["#00CC33" if b >= 0 else "#FF4B4B" for b in basis_df["Basis"]]
-
-            bsfig = make_subplots(
-                rows=2, cols=1, shared_xaxes=True,
-                vertical_spacing=0.04, row_heights=[0.58, 0.42],
-            )
-            bsfig.add_trace(go.Scatter(
-                x=basis_df["Date"], y=basis_df["Avg Price"],
-                mode="lines+markers", name="Imbalance Avg",
-                line=dict(color="#00D4FF", width=2),
-                marker=dict(size=4),
-                hovertemplate="<b>%{x|%d %b}</b><br>Imbalance €%{y:.2f}/MWh<extra></extra>",
-            ), row=1, col=1)
-            bsfig.add_trace(go.Scatter(
-                x=basis_df["Date"], y=basis_df["DAM Avg"],
-                mode="lines+markers", name="DAM Avg",
-                line=dict(color="#7c3aed", width=2),
-                marker=dict(size=4),
-                hovertemplate="<b>%{x|%d %b}</b><br>DAM €%{y:.2f}/MWh<extra>DAM</extra>",
-            ), row=1, col=1)
-            bsfig.add_trace(go.Bar(
-                x=basis_df["Date"], y=basis_df["Basis"],
-                name="Basis (Imb − DAM)",
-                marker_color=b_colors,
-                hovertemplate="<b>%{x|%d %b}</b><br>Basis %{y:+.2f} €/MWh<extra></extra>",
-            ), row=2, col=1)
-            bsfig.add_hline(y=0, line_width=1, line_color="#444D56", row=2, col=1)
-
-            ax = dict(gridcolor="rgba(255,255,255,0.04)", linecolor="#30363D",
-                      tickfont=dict(size=10, color="#8B949E"), zeroline=False,
-                      showspikes=True, spikemode="across", spikesnap="cursor",
-                      spikedash="dot", spikecolor="#444", spikethickness=1)
-            bsfig.update_layout(
-                template="plotly_dark",
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(family="Inter", color="#C9D1D9", size=11),
-                hovermode="x unified",
-                hoverlabel=dict(bgcolor="#1E2D42", bordercolor="#444",
-                                font=dict(size=11, color="#E6EDF3",
-                                          family="'JetBrains Mono',monospace")),
-                legend=dict(bgcolor="rgba(22,27,34,0.9)", bordercolor="#30363D",
-                            borderwidth=1, font=dict(size=11),
-                            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                margin=dict(t=44, b=8, l=8, r=8), height=420,
-                title=dict(text="DAM vs IMBALANCE  ·  DAILY PRICES & BASIS SPREAD",
-                           font=dict(size=12, color="#8B949E"), x=0.01),
-                xaxis={**ax, "showticklabels": False},
-                xaxis2={**ax, "rangeslider": dict(visible=True, bgcolor="#0F1923", thickness=0.04)},
-                yaxis={**ax, "title": dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))},
-                yaxis2={**ax, "title": dict(text="Basis (€/MWh)", font=dict(size=10, color="#8B949E")),
-                        "zeroline": True, "zerolinecolor": "#333"},
-            )
-            st.plotly_chart(bsfig, use_container_width=True, config={"displayModeBar": False})
-            st.markdown(
-                '<p style="margin:0 0 4px;font-size:10px;color:#444D56;font-style:italic">'
-                'Green bars: imbalance settled above DAM (revenue upside vs DA-indexed PPA reference). '
-                'Red bars: imbalance settled below DAM (revenue discount vs DA reference — key basis risk for DA-linked PPAs). '
-                'Persistent red periods should be factored into PPA risk margin and management account commentary.</p>',
-                unsafe_allow_html=True
-            )
+                ax = dict(gridcolor="rgba(255,255,255,0.04)", linecolor="#30363D",
+                          tickfont=dict(size=10, color="#8B949E"), zeroline=False,
+                          showspikes=True, spikemode="across", spikesnap="cursor",
+                          spikedash="dot", spikecolor="#444", spikethickness=1)
+                bsfig.update_layout(
+                    template="plotly_dark",
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(family="Inter", color="#C9D1D9", size=11),
+                    hovermode="x unified",
+                    hoverlabel=dict(bgcolor="#1E2D42", bordercolor="#444",
+                                    font=dict(size=11, color="#E6EDF3",
+                                              family="'JetBrains Mono',monospace")),
+                    legend=dict(bgcolor="rgba(22,27,34,0.9)", bordercolor="#30363D",
+                                borderwidth=1, font=dict(size=11),
+                                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    margin=dict(t=44, b=8, l=8, r=8), height=420,
+                    title=dict(text="DAM vs IMBALANCE  ·  DAILY PRICES & BASIS SPREAD",
+                               font=dict(size=12, color="#8B949E"), x=0.01),
+                    xaxis={**ax, "showticklabels": False},
+                    xaxis2={**ax, "rangeslider": dict(visible=True, bgcolor="#0F1923", thickness=0.04)},
+                    yaxis={**ax, "title": dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))},
+                    yaxis2={**ax, "title": dict(text="Basis (€/MWh)", font=dict(size=10, color="#8B949E")),
+                            "zeroline": True, "zerolinecolor": "#333"},
+                )
+                st.plotly_chart(bsfig, use_container_width=True, config={"displayModeBar": False})
+                st.markdown(
+                    '<p style="margin:0 0 4px;font-size:10px;color:#444D56;font-style:italic">'
+                    'Green bars: imbalance settled above DAM (revenue upside vs DA-indexed PPA reference). '
+                    'Red bars: imbalance settled below DAM (revenue discount vs DA reference — key basis risk for DA-linked PPAs). '
+                    'Persistent red periods should be factored into PPA risk margin and management account commentary.</p>',
+                    unsafe_allow_html=True
+                )
 
 
 # ════════════════════════════════════════════════════════════════════════════

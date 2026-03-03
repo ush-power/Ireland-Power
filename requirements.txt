@@ -7,3 +7,5 @@ google-auth>=2.22.0
 db-dtypes>=1.1.1
 pyarrow>=14.0.0
 requests>=2.31.0
+appdirs>=1.4.4
+aurora-origin-python-sdk @ git+https://github.com/AuroraEnergyResearch/aurora-origin-python-sdk.git

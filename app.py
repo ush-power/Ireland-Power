@@ -278,6 +278,176 @@ def fetch_dam(start: str, end: str) -> pd.DataFrame:
     return df
 
 
+# ─── Aurora Energy Research helpers ──────────────────────────────────────────
+_AURORA_REGION = "irl"   # Ireland 3-letter ISO code used in Aurora Origin
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_aurora_scenarios():
+    """Return (scenarios_list, error_str) for Aurora Ireland scenarios."""
+    key = st.secrets.get("AURORA_API_KEY", "")
+    if not key:
+        return [], "missing_key"
+    os.environ["AURORA_API_KEY"] = key
+    try:
+        from origin_sdk.OriginSession import OriginSession
+        session = OriginSession()
+        raw = session.get_aurora_scenarios(region=_AURORA_REGION)
+        # SDK returns the raw GraphQL dict; unpack data.getScenarios
+        if isinstance(raw, dict):
+            items = (raw.get("data") or {}).get("getScenarios", [])
+        else:
+            items = list(raw) if raw else []
+        return items, None
+    except ImportError:
+        return [], "sdk_not_installed"
+    except Exception as e:
+        return [], str(e)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_aurora_download_types(scenario_id: str):
+    """Discover available download types/granularities for an Ireland scenario."""
+    key = st.secrets.get("AURORA_API_KEY", "")
+    if not key:
+        return []
+    os.environ["AURORA_API_KEY"] = key
+    try:
+        from origin_sdk.OriginSession import OriginSession
+        from origin_sdk.service.Scenario import Scenario as _AS
+        session = OriginSession()
+        scen = _AS(scenario_id, session)
+        region_data = scen.get_scenario_regions()
+        # Find the Ireland region entry
+        for reg in (region_data if isinstance(region_data, list) else []):
+            code = (reg.get("regionCode") or reg.get("region") or "").lower()
+            if code in (_AURORA_REGION, "ie", "sem", "irl"):
+                meta_url = reg.get("metaUrl") or reg.get("meta_url")
+                if meta_url:
+                    meta = session.get_meta_json(meta_url)
+                    defs = meta.get("dataDefinitions", [])
+                    return [(d.get("downloadType"), d.get("granularity")) for d in defs]
+        return []
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_aurora_curve(scenario_id: str):
+    """Download forward power price CSV for Ireland. Returns (df, download_type, err)."""
+    key = st.secrets.get("AURORA_API_KEY", "")
+    if not key:
+        return pd.DataFrame(), None, "missing_key"
+    os.environ["AURORA_API_KEY"] = key
+    try:
+        from io import StringIO
+        from origin_sdk.OriginSession import OriginSession
+        from origin_sdk.service.Scenario import Scenario as _AS
+        session = OriginSession()
+        scen = _AS(scenario_id, session)
+        # Try the most common download_type / granularity combos for power prices
+        attempts = [
+            ("system",        "1y"),
+            ("power_price",   "1y"),
+            ("PowerPrice",    "1y"),
+            ("price",         "1y"),
+            ("system",        "yearly"),
+            ("power_price",   "yearly"),
+        ]
+        # Prefer discovered types if available
+        discovered = fetch_aurora_download_types(scenario_id)
+        if discovered:
+            attempts = discovered + [a for a in attempts if a not in discovered]
+        for download_type, granularity in attempts:
+            try:
+                csv_text = scen.get_scenario_data_csv(
+                    region=_AURORA_REGION,
+                    download_type=download_type,
+                    granularity=granularity,
+                )
+                if csv_text:
+                    df = pd.read_csv(StringIO(csv_text), header=[0, 1])
+                    return df, download_type, None
+            except Exception:
+                continue
+        return pd.DataFrame(), None, "No matching download type found for Ireland"
+    except ImportError:
+        return pd.DataFrame(), None, "sdk_not_installed"
+    except Exception as e:
+        return pd.DataFrame(), None, str(e)
+
+
+def _parse_price_curve(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert Aurora multi-index CSV into a simple Year / Price DataFrame.
+    Handles three common layouts:
+      A) Years as rows, variables as multi-index columns
+      B) Variables as rows, years as columns
+      C) Single-index with Year column
+    """
+    if df.empty:
+        return pd.DataFrame(columns=["Year", "Price"])
+
+    # --- Flatten multi-index columns to searchable strings ---
+    if isinstance(df.columns, pd.MultiIndex):
+        col_labels = [f"{a}|{b}" for a, b in df.columns]
+    else:
+        col_labels = [str(c) for c in df.columns]
+
+    df = df.copy()
+    df.columns = col_labels
+
+    price_kws = ["price", "power", "eur", "wholesale", "electricity", "pwr"]
+
+    def _is_year(v):
+        try:
+            return 2020 <= int(float(str(v).split("|")[0].strip())) <= 2060
+        except Exception:
+            return False
+
+    # --- Layout A: numeric year rows, price in a column ---
+    # Find a "year" column or detect numeric index
+    year_col = next((c for c in col_labels if "year" in c.lower()), None)
+    price_col = next((c for c in col_labels
+                      if any(k in c.lower() for k in price_kws)), None)
+
+    if year_col and price_col:
+        out = pd.DataFrame({"Year": pd.to_numeric(df[year_col], errors="coerce"),
+                            "Price": pd.to_numeric(df[price_col], errors="coerce")})
+        return out.dropna().astype({"Year": int})
+
+    # --- Layout B: years as columns, price row ---
+    year_cols = [(c, int(float(c.split("|")[0].strip())))
+                 for c in col_labels if _is_year(c)]
+    if year_cols:
+        # Find the row that looks like a power price
+        for idx in df.index:
+            row_label = str(df.iloc[idx] if isinstance(idx, int) else idx).lower()
+            idx_label = str(idx).lower()
+            if any(k in idx_label or k in row_label for k in price_kws):
+                years  = [yr for _, yr in year_cols]
+                prices = pd.to_numeric(
+                    [df.loc[idx, col] for col, _ in year_cols], errors="coerce"
+                )
+                return pd.DataFrame({"Year": years, "Price": prices}).dropna().astype({"Year": int})
+        # No labelled row found — take first numeric row
+        for i in range(len(df)):
+            row = pd.to_numeric(
+                [df.iloc[i][col] for col, _ in year_cols], errors="coerce"
+            )
+            if row.notna().all():
+                years = [yr for _, yr in year_cols]
+                return pd.DataFrame({"Year": years, "Price": row.values}).astype({"Year": int})
+
+    # --- Layout C: index is year, find price column ---
+    if _is_year(df.index[0]) and price_col:
+        years = pd.to_numeric(df.index.map(lambda x: str(x).split("|")[0].strip()), errors="coerce")
+        prices = pd.to_numeric(df[price_col], errors="coerce")
+        return pd.DataFrame({"Year": years, "Price": prices}).dropna().astype({"Year": int})
+
+    return pd.DataFrame(columns=["Year", "Price"])
+
+
 # ============================================================================
 # HELPERS
 # ============================================================================
@@ -1917,31 +2087,362 @@ with tab3:
 # TAB 4 — AURORA
 # ════════════════════════════════════════════════════════════════════════════
 with tab4:
-    logo_part = (f'<img src="data:image/png;base64,{LOGO}" '
-                 f'style="height:40px;background:white;border-radius:6px;'
-                 f'padding:4px 8px;margin-bottom:16px">') if LOGO else ""
-    st.markdown(f"""
-    <div style="background:#1E2D42;border:1px solid #2D4A6B;border-radius:12px;
-                padding:48px;text-align:center;margin-top:1rem">
-        {logo_part}
-        <p style="margin:0 0 6px;font-size:10px;font-weight:600;color:#8B949E;
-                  text-transform:uppercase;letter-spacing:0.12em">Coming Soon</p>
-        <h2 style="margin:0 0 10px;font-size:22px;font-weight:700;color:#E6EDF3">
-            Aurora Energy Research
-        </h2>
-        <p style="margin:0 0 28px;font-size:13px;color:#8B949E;
-                  max-width:480px;margin-left:auto;margin-right:auto">
-            Merchant curve integration in development. Once connected, Aurora
-            forward price curves will overlay directly on SEMO actuals for
-            scenario analysis and model inputs.
-        </p>
-        <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
-            {"".join(f'''<div style="background:#172032;border:1px solid #2D4A6B;border-radius:8px;
-                padding:12px 20px;min-width:150px">
-                <p style="margin:0;font-size:10px;color:#8B949E;font-weight:600;
-                   text-transform:uppercase;letter-spacing:0.08em">Planned</p>
-                <p style="margin:6px 0 0;font-size:12px;color:#C9D1D9;font-weight:500">{f}</p>
-            </div>''' for f in ["Forward Price Curves","Forecast vs Actual","Scenario Analysis","Model Export"])}
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    aurora_key = st.secrets.get("AURORA_API_KEY", "")
+
+    # ── No key configured ────────────────────────────────────────────────────
+    if not aurora_key:
+        st.markdown("""
+        <div style="background:#1A1A2E;border:1px solid #2D4A6B;border-radius:12px;
+                    padding:40px;text-align:center;margin-top:1rem">
+          <p style="margin:0 0 6px;font-size:10px;font-weight:600;color:#8B949E;
+                    text-transform:uppercase;letter-spacing:0.12em">Setup Required</p>
+          <h2 style="margin:0 0 12px;font-size:20px;font-weight:700;color:#E6EDF3">
+              Aurora API Key Missing</h2>
+          <p style="margin:0;font-size:12px;color:#8B949E;max-width:480px;margin:0 auto">
+              Add <code style="background:#172032;padding:2px 6px;border-radius:4px;
+              color:#00D4FF">AURORA_API_KEY = "your-key"</code> to Streamlit Cloud Secrets
+              (Settings → Secrets) then reboot the app.</p>
+        </div>""", unsafe_allow_html=True)
+    else:
+        # ── Load scenarios ────────────────────────────────────────────────────
+        with st.spinner("Connecting to Aurora Origin…"):
+            scenarios, aurora_err = fetch_aurora_scenarios()
+
+        # SDK not installed yet — show a clear message
+        if aurora_err == "sdk_not_installed":
+            st.warning("Aurora SDK is installing — this resolves after the first deployment build. "
+                       "Trigger a reboot on Streamlit Cloud once the build completes.")
+        elif aurora_err and not scenarios:
+            st.error(f"Aurora API error: {aurora_err}")
+        else:
+            # ── Scenario selector ────────────────────────────────────────────
+            # Sort: newest publication first; default to latest "central" case
+            def _scen_date(s):
+                try:
+                    return datetime.fromisoformat(
+                        (s.get("publicationDate") or "2000-01-01").replace("Z", ""))
+                except Exception:
+                    return datetime(2000, 1, 1)
+
+            scenarios_sorted = sorted(scenarios, key=_scen_date, reverse=True)
+            central_idx = next(
+                (i for i, s in enumerate(scenarios_sorted)
+                 if "central" in (s.get("name") or "").lower()),
+                0)
+
+            scen_names = [
+                f"{s.get('name','Unnamed')}  ·  "
+                f"{_scen_date(s).strftime('%b %Y') if _scen_date(s).year > 2000 else 'undated'}"
+                for s in scenarios_sorted
+            ]
+
+            sel_idx = st.selectbox(
+                "Aurora Scenario",
+                options=range(len(scen_names)),
+                format_func=lambda i: scen_names[i],
+                index=central_idx,
+                key="aurora_scen_sel",
+            )
+            sel_scen = scenarios_sorted[sel_idx]
+            scen_id  = sel_scen.get("scenarioGlobalId") or sel_scen.get("id") or ""
+            scen_name = sel_scen.get("name", "Unknown Scenario")
+            pub_date  = _scen_date(sel_scen)
+            scen_desc = sel_scen.get("description") or sel_scen.get("longDescription") or ""
+
+            # ── Scenario header ──────────────────────────────────────────────
+            pub_label = pub_date.strftime("%d %b %Y") if pub_date.year > 2000 else "N/A"
+            scen_type = ("Central" if "central" in scen_name.lower()
+                         else "High" if "high" in scen_name.lower()
+                         else "Low" if "low" in scen_name.lower()
+                         else "Scenario")
+            scen_type_color = ("#00CC33" if scen_type == "High"
+                               else "#FF4B4B" if scen_type == "Low"
+                               else "#7c3aed")
+
+            st.markdown(
+                f'<p style="margin:10px 0 8px;font-size:10px;font-weight:600;color:#8B949E;'
+                f'text-transform:uppercase;letter-spacing:0.1em">Aurora Energy Research · Ireland SEM Forecast</p>'
+                f'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">'
+                f'<div style="flex:1;min-width:160px;background:#1A1430;border:1px solid #3D2A6B;'
+                f'border-left:3px solid {scen_type_color};border-radius:8px;padding:11px 14px">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Scenario</p>'
+                f'<p style="margin:4px 0 0;font-size:15px;font-weight:700;color:#E6EDF3">{scen_name}</p>'
+                f'</div>'
+                f'<div style="flex:0 0 auto;background:#1A1430;border:1px solid #3D2A6B;border-radius:8px;padding:11px 14px">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Published</p>'
+                f'<p style="margin:4px 0 0;font-size:15px;font-weight:700;color:#E6EDF3">{pub_label}</p>'
+                f'</div>'
+                f'<div style="flex:0 0 auto;background:#1A1430;border:1px solid #3D2A6B;border-left:3px solid {scen_type_color};border-radius:8px;padding:11px 14px">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Type</p>'
+                f'<p style="margin:4px 0 0;font-size:15px;font-weight:700;color:{scen_type_color}">{scen_type}</p>'
+                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            if scen_desc:
+                st.markdown(
+                    f'<p style="font-size:11.5px;color:#8B949E;margin:0 0 16px;'
+                    f'line-height:1.6">{scen_desc}</p>',
+                    unsafe_allow_html=True,
+                )
+
+            # ── Fetch price curve ─────────────────────────────────────────────
+            with st.spinner("Fetching forward price curve…"):
+                raw_df, used_type, curve_err = fetch_aurora_curve(scen_id)
+
+            curve = _parse_price_curve(raw_df)
+            has_curve = not curve.empty
+
+            if curve_err and not has_curve:
+                st.warning(f"Could not retrieve price curve data: {curve_err}")
+                # Show raw column names to help debug what's available
+                if not raw_df.empty:
+                    st.markdown("**Available data columns in this scenario:**")
+                    if isinstance(raw_df.columns, pd.MultiIndex):
+                        st.write([f"{a} / {b}" for a, b in raw_df.columns[:20]])
+                    else:
+                        st.write(list(raw_df.columns[:20]))
+                    with st.expander("Raw data (first 5 rows)"):
+                        st.dataframe(raw_df.head())
+
+            # ── Forward price curve chart ─────────────────────────────────────
+            if has_curve:
+                curve = curve.sort_values("Year")
+                cur_yr = date.today().year
+                future = curve[curve["Year"] >= cur_yr]
+                past   = curve[curve["Year"] <  cur_yr]
+
+                # KPI cards: near / mid / long
+                def _band_avg(start_yr, end_yr):
+                    sub = future[(future["Year"] >= start_yr) & (future["Year"] <= end_yr)]
+                    return float(sub["Price"].mean()) if not sub.empty else None
+
+                near = _band_avg(cur_yr, cur_yr + 2)
+                mid  = _band_avg(cur_yr + 3, cur_yr + 6)
+                lng  = _band_avg(cur_yr + 7, cur_yr + 15)
+
+                # Year-on-year price change (first two forecast years)
+                if len(future) >= 2:
+                    yoy_val = float(future["Price"].iloc[1]) - float(future["Price"].iloc[0])
+                    yoy_col = "#00CC33" if yoy_val >= 0 else "#FF4B4B"
+                    yoy_lbl = f"{yoy_val:+.1f} €/MWh yr-on-yr"
+                else:
+                    yoy_val, yoy_col, yoy_lbl = 0, "#8B949E", "N/A"
+
+                kpi_cards = [
+                    ("Near-term avg", f"€{near:.1f}/MWh" if near else "N/A",
+                     "#00D4FF", f"{cur_yr}–{cur_yr+2}"),
+                    ("Medium-term avg", f"€{mid:.1f}/MWh" if mid else "N/A",
+                     "#7c3aed", f"{cur_yr+3}–{cur_yr+6}"),
+                    ("Long-term avg", f"€{lng:.1f}/MWh" if lng else "N/A",
+                     "#F59E0B", f"{cur_yr+7}+"),
+                    ("1yr Forward chg", yoy_lbl, yoy_col, "vs prior year"),
+                ]
+                st.markdown(
+                    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">'
+                    + "".join(
+                        f'<div style="flex:1;min-width:160px;background:#0F1923;border:1px solid #2D4A6B;'
+                        f'border-top:2px solid {color};border-radius:8px;padding:12px 14px">'
+                        f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">{label}</p>'
+                        f'<p style="margin:4px 0 2px;font-size:20px;font-weight:700;color:{color};font-family:JetBrains Mono,monospace">{value}</p>'
+                        f'<p style="margin:0;font-size:10px;color:#444D56">{sub}</p>'
+                        f'</div>'
+                        for label, value, color, sub in kpi_cards
+                    )
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
+
+                # Build forward curve chart
+                cfig = go.Figure()
+
+                # Historical shading region (past years in scenario)
+                if not past.empty:
+                    cfig.add_trace(go.Scatter(
+                        x=past["Year"], y=past["Price"],
+                        mode="lines+markers", name="Historical (Aurora)",
+                        line=dict(color="#444D56", width=1.5, dash="dot"),
+                        marker=dict(size=4, color="#444D56"),
+                        hovertemplate="<b>%{x}</b><br>€%{y:.2f}/MWh<extra>Historical</extra>",
+                    ))
+
+                # Future forecast line
+                cfig.add_trace(go.Scatter(
+                    x=future["Year"], y=future["Price"],
+                    mode="lines+markers", name=scen_name,
+                    line=dict(color="#7c3aed", width=2.5),
+                    marker=dict(size=6, color="#7c3aed"),
+                    hovertemplate="<b>%{x}</b><br>€%{y:.2f}/MWh<extra>Aurora Forecast</extra>",
+                ))
+
+                # Reference: current year SEMO average from imbalance data
+                try:
+                    ref_start = f"{cur_yr}-01-01"
+                    ref_end   = date.today().strftime("%Y-%m-%d")
+                    ref_imb   = fetch_imbalance(ref_start, ref_end)
+                    if not ref_imb.empty:
+                        semo_avg = float(ref_imb["ImbalancePrice"].mean())
+                        cfig.add_hline(
+                            y=semo_avg, line_width=1.5, line_dash="dash",
+                            line_color="#00D4FF",
+                            annotation_text=f"YTD SEMO avg €{semo_avg:.1f}",
+                            annotation_font=dict(color="#00D4FF", size=10),
+                        )
+                except Exception:
+                    pass
+
+                # Current year marker
+                cfig.add_vline(x=cur_yr, line_width=1, line_dash="dot",
+                               line_color="#444D56")
+
+                # Band for PPA planning horizon (next 3 years)
+                if near:
+                    cfig.add_vrect(
+                        x0=cur_yr, x1=cur_yr + 3,
+                        fillcolor="rgba(0,212,255,0.05)",
+                        line_width=0,
+                        annotation_text="Near-term",
+                        annotation_position="top left",
+                        annotation_font=dict(size=9, color="#8B949E"),
+                    )
+
+                layout_c = dark_layout(
+                    f"AURORA FORWARD PRICE CURVE  ·  IRELAND SEM  ·  {scen_name.upper()}",
+                    height=420,
+                )
+                layout_c["xaxis"]["title"] = dict(text="Year", font=dict(size=10, color="#8B949E"))
+                layout_c["xaxis"]["tickformat"] = "d"
+                layout_c["xaxis"]["dtick"] = 1
+                layout_c["yaxis"]["title"] = dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))
+                cfig.update_layout(**layout_c)
+                st.plotly_chart(cfig, use_container_width=True, config={"displayModeBar": False})
+                st.markdown(
+                    f'<p style="margin:0 0 20px;font-size:10px;color:#444D56;font-style:italic">'
+                    f'Aurora Energy Research — {scen_name} · Published {pub_label} · '
+                    f'Data type: {used_type} · Region: Ireland SEM · '
+                    f'For commercial reference only — not financial advice.</p>',
+                    unsafe_allow_html=True,
+                )
+
+                # ── Forecast vs Actuals + Annual bar ─────────────────────────
+                col_fva, col_bar = st.columns([3, 2])
+
+                with col_fva:
+                    st.markdown(
+                        '<p style="font-size:10px;font-weight:600;color:#8B949E;'
+                        'text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px">'
+                        'Forecast vs SEMO Actuals</p>',
+                        unsafe_allow_html=True,
+                    )
+                    try:
+                        # Pull ~3 years of historical SEMO annual averages
+                        hist_start = f"{cur_yr - 3}-01-01"
+                        hist_imb   = fetch_imbalance(hist_start, ref_end)
+                        if not hist_imb.empty:
+                            hist_imb["Year"] = hist_imb["StartTime"].dt.year
+                            semo_ann = (hist_imb.groupby("Year")["ImbalancePrice"]
+                                        .mean().reset_index())
+                            semo_ann.columns = ["Year", "Price"]
+
+                            fva_fig = go.Figure()
+                            fva_fig.add_trace(go.Scatter(
+                                x=semo_ann["Year"], y=semo_ann["Price"],
+                                mode="lines+markers", name="SEMO Settlement Avg",
+                                line=dict(color="#00D4FF", width=2),
+                                marker=dict(size=6),
+                                hovertemplate="<b>%{x}</b><br>€%{y:.2f}/MWh<extra>SEMO</extra>",
+                            ))
+                            fva_fig.add_trace(go.Scatter(
+                                x=future["Year"], y=future["Price"],
+                                mode="lines+markers", name="Aurora Forecast",
+                                line=dict(color="#7c3aed", width=2),
+                                marker=dict(size=6),
+                                hovertemplate="<b>%{x}</b><br>€%{y:.2f}/MWh<extra>Aurora</extra>",
+                            ))
+                            # Basis gap annotation at join year
+                            fva_layout = dark_layout("FORECAST vs ACTUALS  ·  Annual Avg", height=300)
+                            fva_layout["xaxis"]["tickformat"] = "d"
+                            fva_layout["yaxis"]["title"] = dict(
+                                text="EUR/MWh", font=dict(size=10, color="#8B949E"))
+                            fva_fig.update_layout(**fva_layout)
+                            st.plotly_chart(fva_fig, use_container_width=True,
+                                            config={"displayModeBar": False})
+                        else:
+                            st.info("No SEMO historical data available for comparison.")
+                    except Exception:
+                        st.info("SEMO historical data unavailable.")
+
+                with col_bar:
+                    st.markdown(
+                        '<p style="font-size:10px;font-weight:600;color:#8B949E;'
+                        'text-transform:uppercase;letter-spacing:0.1em;margin:0 0 8px">'
+                        'Annual Forecast Prices</p>',
+                        unsafe_allow_html=True,
+                    )
+                    bar_data = future[future["Year"] <= cur_yr + 10].copy()
+                    bar_colors = ["#7c3aed" if yr != cur_yr else "#00D4FF"
+                                  for yr in bar_data["Year"]]
+                    bfig = go.Figure(go.Bar(
+                        x=bar_data["Year"], y=bar_data["Price"],
+                        marker_color=bar_colors,
+                        hovertemplate="<b>%{x}</b><br>€%{y:.2f}/MWh<extra></extra>",
+                    ))
+                    bar_layout = dark_layout("10-YEAR PRICE BAR", height=300)
+                    bar_layout["xaxis"]["tickformat"] = "d"
+                    bar_layout["yaxis"]["title"] = dict(
+                        text="EUR/MWh", font=dict(size=10, color="#8B949E"))
+                    bfig.update_layout(**bar_layout)
+                    st.plotly_chart(bfig, use_container_width=True,
+                                    config={"displayModeBar": False})
+
+                # ── Scenario comparison table ─────────────────────────────────
+                if len(scenarios_sorted) > 1:
+                    st.markdown(
+                        '<p style="font-size:10px;font-weight:600;color:#8B949E;'
+                        'text-transform:uppercase;letter-spacing:0.1em;margin:16px 0 8px">'
+                        'Scenario Comparison</p>',
+                        unsafe_allow_html=True,
+                    )
+                    # Build comparison across all scenarios (cached per-scenario)
+                    comp_rows = []
+                    for s in scenarios_sorted[:6]:   # limit to 6 to avoid excessive calls
+                        sid = s.get("scenarioGlobalId") or s.get("id") or ""
+                        if not sid:
+                            continue
+                        sdf, _, _ = fetch_aurora_curve(sid)
+                        sc = _parse_price_curve(sdf)
+                        if sc.empty:
+                            continue
+                        sc = sc.sort_values("Year")
+                        fut = sc[sc["Year"] >= cur_yr]
+                        comp_rows.append({
+                            "Scenario": s.get("name", "Unknown"),
+                            "Published": _scen_date(s).strftime("%b %Y") if _scen_date(s).year > 2000 else "N/A",
+                            f"{cur_yr} (€/MWh)":   round(float(fut[fut["Year"] == cur_yr]["Price"].iloc[0]), 1) if not fut[fut["Year"] == cur_yr].empty else None,
+                            f"{cur_yr+2} (€/MWh)": round(float(fut[fut["Year"] == cur_yr+2]["Price"].iloc[0]), 1) if not fut[fut["Year"] == cur_yr+2].empty else None,
+                            f"{cur_yr+5} (€/MWh)": round(float(fut[fut["Year"] == cur_yr+5]["Price"].iloc[0]), 1) if not fut[fut["Year"] == cur_yr+5].empty else None,
+                        })
+                    if comp_rows:
+                        comp_df = pd.DataFrame(comp_rows)
+                        st.dataframe(
+                            comp_df, use_container_width=True, hide_index=True,
+                            column_config={
+                                "Scenario":  st.column_config.TextColumn("Scenario", width="large"),
+                                "Published": st.column_config.TextColumn("Published", width="small"),
+                            },
+                        )
+                        st.download_button(
+                            "↓  Export Scenario Comparison",
+                            data=comp_df.to_csv(index=False),
+                            file_name=f"aurora_scenario_comparison_{date.today()}.csv",
+                            mime="text/csv",
+                        )
+
+            # ── If no scenarios returned at all ──────────────────────────────
+            if not scenarios:
+                st.info(
+                    "No Aurora scenarios found for Ireland (region code 'irl'). "
+                    "This may mean: (1) your subscription doesn't include an Ireland dataset, "
+                    "or (2) the region code differs — check the Aurora Origin platform URL "
+                    "for the correct 3-letter code and update `_AURORA_REGION` in app.py."
+                )

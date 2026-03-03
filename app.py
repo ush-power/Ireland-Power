@@ -193,11 +193,14 @@ hr { border-color: #2D4A6B !important; margin: 0.75rem 0 !important; }
 # ============================================================================
 @st.cache_resource
 def get_bq_client():
-    credentials = service_account.Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"],
-        scopes=["https://www.googleapis.com/auth/cloud-platform"],
-    )
-    return bigquery.Client(credentials=credentials, project="semo-price-automation")
+    try:
+        credentials = service_account.Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"],
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+        return bigquery.Client(credentials=credentials, project="semo-price-automation")
+    except Exception:
+        return None
 
 
 # ============================================================================
@@ -205,6 +208,9 @@ def get_bq_client():
 # ============================================================================
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_imbalance(start: str, end: str) -> pd.DataFrame:
+    client = get_bq_client()
+    if client is None:
+        return pd.DataFrame(columns=["StartTime", "ImbalancePrice", "NetImbalanceVolume"])
     query = f"""
         SELECT StartTime,
                CAST(ImbalancePrice     AS FLOAT64) AS ImbalancePrice,
@@ -213,7 +219,7 @@ def fetch_imbalance(start: str, end: str) -> pd.DataFrame:
         WHERE DATE(TradeDate) BETWEEN '{start}' AND '{end}'
         ORDER BY StartTime
     """
-    df = get_bq_client().query(query).to_dataframe()
+    df = client.query(query).to_dataframe()
     df["StartTime"] = pd.to_datetime(df["StartTime"])
     return df
 

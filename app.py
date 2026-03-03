@@ -1138,6 +1138,116 @@ with tab2:
             })
             st.plotly_chart(hfig, use_container_width=True, config={"displayModeBar": False})
 
+        # ── Chart Commentary ──
+        imb_avg_h  = float(imb_h["ImbalancePrice"].mean())
+        imb_std_h  = float(imb_h["ImbalancePrice"].std())
+        imb_cv_h   = imb_std_h / imb_avg_h * 100 if imb_avg_h > 0 else 0
+        n_pr       = len(price_r)
+        first_h    = float(price_r["p"].iloc[:max(n_pr // 2, 1)].mean())
+        second_h   = float(price_r["p"].iloc[max(n_pr // 2, 1):].mean()) if n_pr > 1 else first_h
+        trend_h    = ((second_h / first_h) - 1) * 100 if first_h > 0 else 0
+        vol_latest = float(roll_vol["vol"].dropna().iloc[-1]) if not roll_vol["vol"].dropna().empty else 0
+        vol_avg    = float(roll_vol["vol"].dropna().mean()) if not roll_vol["vol"].dropna().empty else 1
+        dam_avg_h2 = float(dam_h["Price"].mean()) if not dam_h.empty else None
+        basis_h    = imb_avg_h - dam_avg_h2 if dam_avg_h2 is not None else None
+
+        hour_avgs = pivot.mean(axis=0)
+        peak_hr   = int(hour_avgs.idxmax())
+        cheap_hr  = int(hour_avgs.idxmin())
+        day_avgs  = pivot.mean(axis=1)
+        peak_day  = day_avgs.idxmax()
+        cheap_day = day_avgs.idxmin()
+
+        chart_notes = []
+
+        # Price trend
+        if trend_h > 5:
+            chart_notes.append({"icon": "↗", "color": "#00CC33",
+                "text": (f"Prices trended <strong>upward</strong> over the period: the {h2_label.lower()} rose {trend_h:.1f}% "
+                         f"from €{first_h:.2f}/MWh in the first half to €{second_h:.2f}/MWh in the second half. "
+                         f"For a revenue budget, this directional move is favourable — settlement prices exceeded the period opening level. "
+                         f"If the trend persists, PPA floor price assumptions may need revisiting upward.")})
+        elif trend_h < -5:
+            chart_notes.append({"icon": "↘", "color": "#FF4B4B",
+                "text": (f"Prices trended <strong>downward</strong> over the period: the {h2_label.lower()} fell {abs(trend_h):.1f}% "
+                         f"from €{first_h:.2f}/MWh in the first half to €{second_h:.2f}/MWh in the second half. "
+                         f"Falling settlement prices compress revenue margins for merchant and DA-referenced assets. "
+                         f"Stress-test budget models against the second-half average (€{second_h:.2f}/MWh) as a near-term central case.")})
+        else:
+            chart_notes.append({"icon": "→", "color": "#8B949E",
+                "text": (f"Prices were broadly <strong>range-bound</strong> over the period (first-half avg €{first_h:.2f} vs "
+                         f"second-half avg €{second_h:.2f}/MWh, {trend_h:+.1f}%). "
+                         f"A flat price environment supports the reliability of the P50 budget estimate. "
+                         f"Management account forecasts for this period should be relatively close to the period mean of €{imb_avg_h:.2f}/MWh.")})
+
+        # Volatility
+        if vol_latest > vol_avg * 1.4:
+            chart_notes.append({"icon": "⚡", "color": "#FF4B4B",
+                "text": (f"Volatility is <strong>elevated at the end of the period</strong>: the rolling σ of €{vol_latest:.2f}/MWh "
+                         f"is significantly above the period average of €{vol_avg:.2f}/MWh. "
+                         f"Rising volatility increases the risk that budget point estimates diverge from actual settlement. "
+                         f"Widen uncertainty bands in any near-term forecasts and flag this to the CFO in management account commentary.")})
+        elif vol_latest < vol_avg * 0.6:
+            chart_notes.append({"icon": "≈", "color": "#00CC33",
+                "text": (f"Volatility has <strong>compressed toward the end of the period</strong>: rolling σ of €{vol_latest:.2f}/MWh "
+                         f"is well below the period average of €{vol_avg:.2f}/MWh. "
+                         f"Tighter price dispersion improves the predictability of imbalance settlement costs and supports "
+                         f"confidence in the P50 budget midpoint for near-term planning.")})
+        elif imb_cv_h > 60:
+            chart_notes.append({"icon": "〜", "color": "#F59E0B",
+                "text": (f"Overall price volatility is <strong>high</strong> for the period (CV {imb_cv_h:.0f}%, σ €{imb_std_h:.2f}/MWh). "
+                         f"Wide intraday swings are visible in the chart — budget models using a single flat rate for imbalance "
+                         f"costs will be imprecise. Use the P10–P90 range on the Commercial Tools tab for scenario-banded forecasting.")})
+
+        # Heatmap: peak and cheap hours
+        chart_notes.append({"icon": "⏱", "color": "#F59E0B",
+            "text": (f"The heatmap shows the most expensive average imbalance hour was <strong>{peak_hr:02d}:00</strong> "
+                     f"(avg €{hour_avgs[peak_hr]:.2f}/MWh) and the cheapest was <strong>{cheap_hr:02d}:00</strong> "
+                     f"(avg €{hour_avgs[cheap_hr]:.2f}/MWh). "
+                     f"<strong>{peak_day}</strong> was the highest-price day of the period; <strong>{cheap_day}</strong> was the lowest. "
+                     f"These intraday patterns are relevant for time-of-day PPA shaping assumptions and operational dispatch scheduling — "
+                     f"assets generating during peak hours capture materially more revenue per MWh.")})
+
+        # DAM basis
+        if basis_h is not None:
+            if basis_h > 10:
+                chart_notes.append({"icon": "↑", "color": "#FF4B4B",
+                    "text": (f"Imbalance prices averaged <strong>€{basis_h:.2f}/MWh above the Day Ahead Market</strong> "
+                             f"(Imbalance: €{imb_avg_h:.2f} vs DAM: €{dam_avg_h2:.2f}/MWh). "
+                             f"For DA-indexed PPAs, this positive basis represents additional revenue above the contracted reference. "
+                             f"This spread should be incorporated into PPA risk premium calculations for any upcoming contract review.")})
+            elif basis_h < -10:
+                chart_notes.append({"icon": "↓", "color": "#00CC33",
+                    "text": (f"Imbalance prices averaged <strong>€{abs(basis_h):.2f}/MWh below the Day Ahead Market</strong> "
+                             f"(Imbalance: €{imb_avg_h:.2f} vs DAM: €{dam_avg_h2:.2f}/MWh). "
+                             f"Assets with DA-indexed PPAs received more than the imbalance settlement price during this period. "
+                             f"This negative basis is typical in high-generation (SSP) conditions and is the primary driver of "
+                             f"capture price discount for wind and solar portfolios.")})
+            else:
+                chart_notes.append({"icon": "≈", "color": "#94A3B8",
+                    "text": (f"Imbalance and Day Ahead prices tracked closely: avg basis of {basis_h:+.2f} €/MWh "
+                             f"(Imbalance: €{imb_avg_h:.2f} vs DAM: €{dam_avg_h2:.2f}/MWh). "
+                             f"Low basis risk during this period reduces the PPA pricing adjustment needed for DA-indexed contracts. "
+                             f"This is a useful benchmark to reference when justifying tight basis assumptions in PPA negotiations.")})
+
+        notes_html = "".join(
+            f'<div style="display:flex;gap:14px;align-items:flex-start;padding:10px 0;border-bottom:1px solid rgba(45,74,107,0.4)">'
+            f'<span style="font-size:13px;color:{o["color"]};font-weight:700;min-width:20px;text-align:center;margin-top:2px;font-family:monospace">{o["icon"]}</span>'
+            f'<p style="margin:0;font-size:12.5px;color:#C9D1D9;line-height:1.65">{o["text"]}</p>'
+            f'</div>'
+            for o in chart_notes
+        )
+        st.markdown(f"""
+        <div style="background:#141F2E;border:1px solid #2D4A6B;border-top:2px solid #00D4FF;
+                    border-radius:10px;padding:16px 20px;margin:14px 0 18px">
+          <p style="margin:0 0 12px;font-size:10px;font-weight:600;color:#00D4FF;
+                    text-transform:uppercase;letter-spacing:0.12em">Period Chart Analysis</p>
+          {notes_html}
+          <p style="margin:10px 0 0;font-size:10px;color:#444D56;font-style:italic">
+            Auto-generated from {len(imb_h):,} settlement intervals · {h2_label} resolution displayed</p>
+        </div>
+        """, unsafe_allow_html=True)
+
         # ── DAM Price Trend Over Time ──
         if not dam_h.empty:
             dam_tr = dam_h.copy()

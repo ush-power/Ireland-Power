@@ -1011,36 +1011,75 @@ with tab2:
         col_a, col_b = st.columns([3, 2])
 
         with col_a:
-            # Volatility + Price synced subplot
-            hourly_p = imb_h.set_index("StartTime")["ImbalancePrice"].resample("1h").mean()
-            roll_vol = hourly_p.rolling(24).std().reset_index()
+            # Auto-resample for readability
+            if days_sel <= 7:
+                h2_rule, h2_vol_win, h2_label = "1h",  24,  "Hourly Avg"
+            elif days_sel <= 30:
+                h2_rule, h2_vol_win, h2_label = "1D",   7,  "Daily Avg"
+            else:
+                h2_rule, h2_vol_win, h2_label = "1D",  14,  "Daily Avg"
+
+            price_r = (imb_h.set_index("StartTime")["ImbalancePrice"]
+                       .resample(h2_rule).mean())
+            high_r  = (imb_h.set_index("StartTime")["ImbalancePrice"]
+                       .resample(h2_rule).max())
+            low_r   = (imb_h.set_index("StartTime")["ImbalancePrice"]
+                       .resample(h2_rule).min())
+            roll_vol = price_r.rolling(h2_vol_win).std().reset_index()
             roll_vol.columns = ["t", "vol"]
-            hourly_p = hourly_p.reset_index()
-            hourly_p.columns = ["t", "p"]
+            price_r  = price_r.reset_index()
+            price_r.columns = ["t", "p"]
+            high_r   = high_r.reset_index()
+            high_r.columns = ["t", "h"]
+            low_r    = low_r.reset_index()
+            low_r.columns = ["t", "l"]
 
             vfig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                                  vertical_spacing=0.03, row_heights=[0.6, 0.4])
-            vfig.add_trace(go.Scatter(
-                x=hourly_p["t"], y=hourly_p["p"],
-                mode="lines", name="Hourly Avg Price",
-                line=dict(color="#00D4FF", width=1.5),
-                fill="tozeroy", fillcolor="rgba(0,212,255,0.07)",
-                hovertemplate="<b>%{x|%d %b %H:%M}</b><br>€%{y:.2f}/MWh<extra></extra>",
-            ), row=1, col=1)
-            if not dam_h.empty:
+
+            # High/low range band for daily+ views
+            if h2_rule == "1D":
                 vfig.add_trace(go.Scatter(
-                    x=dam_h["StartTime"], y=dam_h["Price"],
-                    mode="lines+markers", name="DAM Price",
-                    line=dict(color="#7c3aed", width=1.5),
-                    marker=dict(size=3),
-                    hovertemplate="<b>%{x|%d %b %H:%M}</b><br>€%{y:.2f}/MWh<extra>DAM</extra>",
+                    x=pd.concat([high_r["t"], low_r["t"].iloc[::-1]]),
+                    y=pd.concat([high_r["h"], low_r["l"].iloc[::-1]]),
+                    fill="toself", fillcolor="rgba(0,212,255,0.08)",
+                    line=dict(color="rgba(0,0,0,0)"),
+                    name="Daily High/Low Range", hoverinfo="skip",
                 ), row=1, col=1)
+
+            vfig.add_trace(go.Scatter(
+                x=price_r["t"], y=price_r["p"],
+                mode="lines", name=h2_label,
+                line=dict(color="#00D4FF", width=2),
+                hovertemplate="<b>%{x|%d %b}</b><br>€%{y:.2f}/MWh<extra></extra>",
+            ), row=1, col=1)
+
+            if not dam_h.empty:
+                if h2_rule == "1D":
+                    dam_plot = (dam_h.set_index("StartTime")["Price"]
+                                .resample("1D").mean().reset_index())
+                    dam_plot.columns = ["StartTime", "Price"]
+                    dam_mode = "lines"
+                    dam_marker = {}
+                else:
+                    dam_plot = dam_h
+                    dam_mode = "lines+markers"
+                    dam_marker = dict(size=3)
+                vfig.add_trace(go.Scatter(
+                    x=dam_plot["StartTime"], y=dam_plot["Price"],
+                    mode=dam_mode, name="DAM Price",
+                    line=dict(color="#7c3aed", width=1.5, dash="dot"),
+                    marker=dam_marker,
+                    hovertemplate="<b>%{x|%d %b}</b><br>€%{y:.2f}/MWh<extra>DAM</extra>",
+                ), row=1, col=1)
+
+            vol_label = f"{h2_vol_win}{'h' if h2_rule == '1h' else 'd'} Volatility (σ)"
             vfig.add_trace(go.Scatter(
                 x=roll_vol["t"], y=roll_vol["vol"],
-                mode="lines", name="24h Volatility (σ)",
+                mode="lines", name=vol_label,
                 line=dict(color="#FF4B4B", width=1.5),
                 fill="tozeroy", fillcolor="rgba(255,75,75,0.1)",
-                hovertemplate="<b>%{x|%d %b %H:%M}</b><br>σ €%{y:.2f}<extra></extra>",
+                hovertemplate="<b>%{x|%d %b}</b><br>σ €%{y:.2f}<extra></extra>",
             ), row=2, col=1)
 
             axis_s = dict(gridcolor="rgba(255,255,255,0.04)", linecolor="#30363D",
@@ -1060,7 +1099,7 @@ with tab2:
                             orientation="h", yanchor="bottom", y=1.02,
                             xanchor="right", x=1),
                 margin=dict(t=44, b=8, l=8, r=8), height=480,
-                title=dict(text="PRICE TREND  ·  24H ROLLING VOLATILITY",
+                title=dict(text=f"PRICE TREND  ·  {h2_label.upper()}  ·  DAM OVERLAY",
                            font=dict(size=12, color="#8B949E"), x=0.01),
                 xaxis={**axis_s, "showticklabels": False},
                 xaxis2={**axis_s,

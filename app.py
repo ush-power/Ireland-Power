@@ -672,6 +672,11 @@ with tab1:
         peak = imb_df["ImbalancePrice"].max()
         avg  = imb_df["ImbalancePrice"].mean()
 
+        # DAM latest price and basis
+        dam_latest_price  = float(dam_df.iloc[-1]["Price"])  if not dam_df.empty else None
+        dam_latest_time   = dam_df.iloc[-1]["StartTime"]     if not dam_df.empty else None
+        dam_basis_latest  = latest_price - dam_latest_price  if dam_latest_price is not None else None
+
         # ── KPI Ribbon ──
         def info_badge(tip: str) -> str:
             return (f'<span title="{tip}" style="cursor:help;font-size:9px;font-weight:700;'
@@ -682,9 +687,11 @@ with tab1:
         tip_price = ("The most recent imbalance settlement price in the dataset, in Euro per MWh. "
                      "Data is updated once daily — this is not a real-time feed. "
                      "SBP applies when the system is short (needs more power); SSP applies when long (surplus).")
-        tip_24h   = ("The spread between the highest and lowest imbalance price in the last 24 hours of the selected period. "
-                     "A wide range signals high price volatility — relevant when stress-testing budget assumptions or "
-                     "assessing the risk of forecast errors coinciding with price extremes.")
+        tip_dam   = ("The most recent hourly Day Ahead Market (DAM) price from ENTSO-E for the Ireland SEM bidding zone. "
+                     "The basis (imbalance minus DAM) shows whether real-time settlement is running above or below the "
+                     "day-ahead reference — a direct measure of PPA basis risk for DA-indexed contracts. "
+                     "Positive basis = imbalance above DA (revenue upside for sellers). "
+                     "Negative basis = imbalance below DA (revenue discount vs DA reference).")
         tip_peak  = ("The highest imbalance price recorded during the selected date range. "
                      "Price spikes indicate acute periods of system stress, often driven by low wind or unexpected plant outages.")
         tip_avg   = ("The mean imbalance price across all 5-minute intervals in the selected period. "
@@ -723,15 +730,15 @@ with tab1:
               {latest["StartTime"].strftime("%d %b %Y, %H:%M")}</div>
           </div>
 
-          <div style="flex:1;min-width:140px;background:#1E2D42;
-                      border:1px solid #2D4A6B;border-top:2px solid #94A3B8;
+          <div style="flex:1;min-width:140px;background:#1A1430;
+                      border:1px solid #3D2A6B;border-top:2px solid #7c3aed;
                       border-radius:10px;padding:14px 18px">
             <div style="display:flex;align-items:center;margin-bottom:5px">
-              <span style="font-size:10px;font-weight:600;color:#8B949E;
-                           text-transform:uppercase;letter-spacing:0.1em">24H Price Range</span>
-              {info_badge(tip_24h)}
+              <span style="font-size:10px;font-weight:600;color:#7c3aed;
+                           text-transform:uppercase;letter-spacing:0.1em">Latest DAM Price</span>
+              {info_badge(tip_dam)}
             </div>
-            {'<p style="margin:0;font-size:22px;font-weight:700;color:#E6EDF3;font-family:JetBrains Mono,monospace">€' + f"{h24_range:.2f}" + '</p><p style="margin:5px 0 0;font-size:10px;color:#8B949E;font-family:JetBrains Mono,monospace"><span style=\'color:#FF4B4B\'>H €' + f"{h24_high:.2f}" + '</span>  ·  <span style=\'color:#00CC33\'>L €' + f"{h24_low:.2f}" + '</span></p>' if h24_range is not None else '<p style="margin:0;font-size:22px;font-weight:700;color:#8B949E">—</p><p style="margin:5px 0 0;font-size:10px;color:#8B949E">No data</p>'}
+            {'<p style="margin:0;font-size:22px;font-weight:700;color:#E6EDF3;font-family:JetBrains Mono,monospace">€' + f"{dam_latest_price:.2f}" + '</p><p style="margin:5px 0 0;font-size:10px;font-family:JetBrains Mono,monospace;color:' + ("#00CC33" if (dam_basis_latest or 0) >= 0 else "#FF4B4B") + '">' + (f"{'+'if (dam_basis_latest or 0)>=0 else ''}€{dam_basis_latest:.2f} basis vs imb" if dam_basis_latest is not None else "—") + '</p>' if dam_latest_price is not None else '<p style="margin:0;font-size:22px;font-weight:700;color:#8B949E">—</p><p style="margin:5px 0 0;font-size:10px;color:#8B949E">No DAM data</p>'}
           </div>
 
           <div style="flex:1;min-width:140px;background:#1E2D42;
@@ -823,20 +830,54 @@ with tab1:
             row_heights=[0.65, 0.35],
         )
 
-        # Split by system state for colour
-        for mask, name, col, fill in [
-            (imb_df["NetImbalanceVolume"] < 0,  "SBP (Short)", "#FF4B4B", "rgba(255,75,75,0.07)"),
-            (imb_df["NetImbalanceVolume"] >= 0, "SSP (Long)",  "#00D4FF", "rgba(0,212,255,0.07)"),
-        ]:
-            seg = imb_df.copy()
-            seg.loc[~mask, "ImbalancePrice"] = None
+        # Auto-resample for readability based on selected date range
+        if days_sel <= 7:
+            resample_rule, res_label = None,   "5-min"
+        elif days_sel <= 30:
+            resample_rule, res_label = "1h",   "Hourly avg"
+        else:
+            resample_rule, res_label = "1D",   "Daily avg"
+
+        if resample_rule:
+            imb_plot = (imb_df.set_index("StartTime")
+                        .resample(resample_rule)
+                        .agg(ImbalancePrice=("ImbalancePrice","mean"),
+                             NetImbalanceVolume=("NetImbalanceVolume","mean"))
+                        .reset_index())
+        else:
+            imb_plot = imb_df.copy()
+
+        if resample_rule in ("1h", "1D"):
+            # For wider views: single blended price line + SBP% shading
+            sbp_pct = (imb_df.set_index("StartTime")["NetImbalanceVolume"]
+                       .resample(resample_rule).apply(lambda s: (s < 0).mean())
+                       .reset_index())
+            sbp_pct.columns = ["StartTime", "sbp_pct"]
+            imb_plot = imb_plot.merge(sbp_pct, on="StartTime", how="left")
+
+            line_col = "#F59E0B"  # amber for blended
             fig.add_trace(go.Scatter(
-                x=seg["StartTime"], y=seg["ImbalancePrice"],
-                mode="lines", name=name,
-                line=dict(color=col, width=1.5),
-                fill="tozeroy", fillcolor=fill,
-                hovertemplate="<b>%{x|%d %b %H:%M}</b><br>€%{y:.2f}/MWh<extra>" + name + "</extra>",
+                x=imb_plot["StartTime"], y=imb_plot["ImbalancePrice"],
+                mode="lines", name=f"Imbalance Avg ({res_label})",
+                line=dict(color=line_col, width=2),
+                fill="tozeroy", fillcolor="rgba(245,158,11,0.07)",
+                hovertemplate="<b>%{x|%d %b %H:%M}</b><br>€%{y:.2f}/MWh<extra>Imbalance</extra>",
             ), row=1, col=1)
+        else:
+            # ≤7 days: full SBP/SSP colour split at 5-min resolution
+            for mask, name, col, fill in [
+                (imb_plot["NetImbalanceVolume"] < 0,  "SBP (Short)", "#FF4B4B", "rgba(255,75,75,0.07)"),
+                (imb_plot["NetImbalanceVolume"] >= 0, "SSP (Long)",  "#00D4FF", "rgba(0,212,255,0.07)"),
+            ]:
+                seg = imb_plot.copy()
+                seg.loc[~mask, "ImbalancePrice"] = None
+                fig.add_trace(go.Scatter(
+                    x=seg["StartTime"], y=seg["ImbalancePrice"],
+                    mode="lines", name=name,
+                    line=dict(color=col, width=1.5),
+                    fill="tozeroy", fillcolor=fill,
+                    hovertemplate="<b>%{x|%d %b %H:%M}</b><br>€%{y:.2f}/MWh<extra>" + name + "</extra>",
+                ), row=1, col=1)
 
         if not dam_df.empty:
             fig.add_trace(go.Scatter(
@@ -846,13 +887,13 @@ with tab1:
                 hovertemplate="<b>%{x|%d %b %H:%M}</b><br>€%{y:.2f}/MWh<extra>DAM</extra>",
             ), row=1, col=1)
 
-        vol_colors = imb_df["NetImbalanceVolume"].apply(
+        niv_colors = imb_plot["NetImbalanceVolume"].apply(
             lambda v: "#00CC33" if v >= 0 else "#FF4B4B"
         ).tolist()
         fig.add_trace(go.Bar(
-            x=imb_df["StartTime"], y=imb_df["NetImbalanceVolume"],
+            x=imb_plot["StartTime"], y=imb_plot["NetImbalanceVolume"],
             name="NIV",
-            marker=dict(color=vol_colors, opacity=0.9, line=dict(width=0)),
+            marker=dict(color=niv_colors, opacity=0.9, line=dict(width=0)),
             hovertemplate="<b>%{x|%d %b %H:%M}</b><br>%{y:+.1f} MWh<extra>NIV</extra>",
         ), row=2, col=1)
 
@@ -876,7 +917,7 @@ with tab1:
                         xanchor="right", x=1),
             margin=dict(t=44, b=8, l=8, r=8),
             height=560,
-            title=dict(text="IMBALANCE PRICE  ·  NET IMBALANCE VOLUME",
+            title=dict(text=f"IMBALANCE PRICE  ·  NET IMBALANCE VOLUME  ·  {res_label.upper()}",
                        font=dict(size=12, color="#8B949E"), x=0.01),
             xaxis={**axis_style, "showticklabels": False},
             xaxis2={**axis_style,

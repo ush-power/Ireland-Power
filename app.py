@@ -1118,6 +1118,71 @@ with tab2:
         st.download_button("↓  Export Daily Summary", data=daily.drop(columns=["Price Trend"]).to_csv(index=False),
                            file_name=f"daily_summary_{start_str}_{end_str}.csv", mime="text/csv")
 
+        # ── DAM vs Imbalance Basis Spread ──
+        if not dam_h.empty and "DAM Avg" in daily.columns:
+            basis_df = daily[daily["DAM Avg"].notna()].copy()
+            basis_df["Date"] = pd.to_datetime(basis_df["Date"])
+            b_colors = ["#00CC33" if b >= 0 else "#FF4B4B" for b in basis_df["Basis"]]
+
+            bsfig = make_subplots(
+                rows=2, cols=1, shared_xaxes=True,
+                vertical_spacing=0.04, row_heights=[0.58, 0.42],
+            )
+            bsfig.add_trace(go.Scatter(
+                x=basis_df["Date"], y=basis_df["Avg Price"],
+                mode="lines+markers", name="Imbalance Avg",
+                line=dict(color="#00D4FF", width=2),
+                marker=dict(size=4),
+                hovertemplate="<b>%{x|%d %b}</b><br>Imbalance €%{y:.2f}/MWh<extra></extra>",
+            ), row=1, col=1)
+            bsfig.add_trace(go.Scatter(
+                x=basis_df["Date"], y=basis_df["DAM Avg"],
+                mode="lines+markers", name="DAM Avg",
+                line=dict(color="#7c3aed", width=2),
+                marker=dict(size=4),
+                hovertemplate="<b>%{x|%d %b}</b><br>DAM €%{y:.2f}/MWh<extra>DAM</extra>",
+            ), row=1, col=1)
+            bsfig.add_trace(go.Bar(
+                x=basis_df["Date"], y=basis_df["Basis"],
+                name="Basis (Imb − DAM)",
+                marker_color=b_colors,
+                hovertemplate="<b>%{x|%d %b}</b><br>Basis %{y:+.2f} €/MWh<extra></extra>",
+            ), row=2, col=1)
+            bsfig.add_hline(y=0, line_width=1, line_color="#444D56", row=2, col=1)
+
+            ax = dict(gridcolor="rgba(255,255,255,0.04)", linecolor="#30363D",
+                      tickfont=dict(size=10, color="#8B949E"), zeroline=False,
+                      showspikes=True, spikemode="across", spikesnap="cursor",
+                      spikedash="dot", spikecolor="#444", spikethickness=1)
+            bsfig.update_layout(
+                template="plotly_dark",
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="Inter", color="#C9D1D9", size=11),
+                hovermode="x unified",
+                hoverlabel=dict(bgcolor="#1E2D42", bordercolor="#444",
+                                font=dict(size=11, color="#E6EDF3",
+                                          family="'JetBrains Mono',monospace")),
+                legend=dict(bgcolor="rgba(22,27,34,0.9)", bordercolor="#30363D",
+                            borderwidth=1, font=dict(size=11),
+                            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                margin=dict(t=44, b=8, l=8, r=8), height=420,
+                title=dict(text="DAM vs IMBALANCE  ·  DAILY PRICES & BASIS SPREAD",
+                           font=dict(size=12, color="#8B949E"), x=0.01),
+                xaxis={**ax, "showticklabels": False},
+                xaxis2={**ax, "rangeslider": dict(visible=True, bgcolor="#0F1923", thickness=0.04)},
+                yaxis={**ax, "title": dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))},
+                yaxis2={**ax, "title": dict(text="Basis (€/MWh)", font=dict(size=10, color="#8B949E")),
+                        "zeroline": True, "zerolinecolor": "#333"},
+            )
+            st.plotly_chart(bsfig, use_container_width=True, config={"displayModeBar": False})
+            st.markdown(
+                '<p style="margin:0 0 4px;font-size:10px;color:#444D56;font-style:italic">'
+                'Green bars: imbalance settled above DAM (revenue upside vs DA-indexed PPA reference). '
+                'Red bars: imbalance settled below DAM (revenue discount vs DA reference — key basis risk for DA-linked PPAs). '
+                'Persistent red periods should be factored into PPA risk margin and management account commentary.</p>',
+                unsafe_allow_html=True
+            )
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 3 — COMMERCIAL TOOLS
@@ -1147,6 +1212,75 @@ with tab3:
         ssp_avg_s2 = float(ssp_p.mean()) if not ssp_p.empty else None
         dam_avg_s2 = float(dam_s["Price"].mean()) if not dam_s.empty else None
         basis_s2   = mu_s - dam_avg_s2 if dam_avg_s2 is not None else None
+
+        # ── Section 0: DAM Price Summary ──
+        if not dam_s.empty:
+            dam_px       = dam_s["Price"].dropna()
+            dam_avg_kpi  = float(dam_px.mean())
+            dam_high_kpi = float(dam_px.max())
+            dam_low_kpi  = float(dam_px.min())
+            dam_std_kpi  = float(dam_px.std())
+            dam_cv_kpi   = dam_std_kpi / dam_avg_kpi * 100 if dam_avg_kpi > 0 else 0
+            pct_above_100 = float((dam_px > 100).mean() * 100)
+            pct_below_50  = float((dam_px < 50).mean() * 100)
+
+            dam_s_hr        = dam_s.copy()
+            dam_s_hr["Hour"] = dam_s_hr["StartTime"].dt.hour
+            peak_px   = dam_s_hr[(dam_s_hr["Hour"] >= 8) & (dam_s_hr["Hour"] < 20)]["Price"]
+            offpk_px  = dam_s_hr[(dam_s_hr["Hour"] < 8) | (dam_s_hr["Hour"] >= 20)]["Price"]
+            dam_peak  = float(peak_px.mean())  if not peak_px.empty  else None
+            dam_offpk = float(offpk_px.mean()) if not offpk_px.empty else None
+            pk_premium = ((dam_peak / dam_offpk) - 1) * 100 if (dam_peak and dam_offpk and dam_offpk > 0) else None
+
+            pk_col  = "#00CC33" if pk_premium and pk_premium > 0 else "#8B949E"
+            cv_col  = "#FF4B4B" if dam_cv_kpi > 60 else "#F59E0B" if dam_cv_kpi > 35 else "#00CC33"
+            h100_col = "#FF4B4B" if pct_above_100 > 20 else "#F59E0B" if pct_above_100 > 5 else "#00CC33"
+
+            st.markdown('<p style="margin:0 0 10px;font-size:10px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Day Ahead Market — Period Summary</p>', unsafe_allow_html=True)
+            dam_kpi_html = (
+                f'<div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap">'
+                f'<div style="flex:1.3;min-width:130px;background:#1A1430;border:1px solid #3D2A6B;border-top:2px solid #7c3aed;border-radius:8px;padding:11px 13px">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#7c3aed;text-transform:uppercase;letter-spacing:0.1em">DAM Period Avg</p>'
+                f'<p style="margin:5px 0 0;font-size:24px;font-weight:700;color:#E6EDF3;font-family:JetBrains Mono,monospace">€{dam_avg_kpi:.2f}</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">EUR / MWh</p></div>'
+                f'<div style="flex:1;min-width:110px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid #FF4B4B;border-radius:8px;padding:11px 13px">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">DAM High</p>'
+                f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:#FF4B4B;font-family:JetBrains Mono,monospace">€{dam_high_kpi:.2f}</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">Period peak</p></div>'
+                f'<div style="flex:1;min-width:110px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid #00CC33;border-radius:8px;padding:11px 13px">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">DAM Low</p>'
+                f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:#00CC33;font-family:JetBrains Mono,monospace">€{dam_low_kpi:.2f}</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">Period floor</p></div>'
+                f'<div style="flex:1;min-width:110px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid {cv_col};border-radius:8px;padding:11px 13px">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">DAM Volatility</p>'
+                f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:{cv_col};font-family:JetBrains Mono,monospace">{dam_cv_kpi:.0f}%</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">CV (σ / avg)</p></div>'
+                f'<div style="flex:1;min-width:110px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid {h100_col};border-radius:8px;padding:11px 13px">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Hours &gt; €100</p>'
+                f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:{h100_col};font-family:JetBrains Mono,monospace">{pct_above_100:.0f}%</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">of DA hours</p></div>'
+                f'</div>'
+            )
+            if dam_peak is not None and dam_offpk is not None:
+                dam_kpi_html += (
+                    f'<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">'
+                    f'<div style="flex:1;min-width:140px;background:#1E2D42;border:1px solid #2D4A6B;border-left:3px solid #7c3aed;border-radius:8px;padding:10px 13px">'
+                    f'<p style="margin:0;font-size:9px;font-weight:600;color:#7c3aed;text-transform:uppercase;letter-spacing:0.1em">Peak Hours Avg &nbsp;·&nbsp; 08:00–20:00 UTC</p>'
+                    f'<p style="margin:4px 0 0;font-size:20px;font-weight:700;color:#E6EDF3;font-family:JetBrains Mono,monospace">€{dam_peak:.2f}/MWh</p>'
+                    f'</div>'
+                    f'<div style="flex:1;min-width:140px;background:#1E2D42;border:1px solid #2D4A6B;border-left:3px solid #444D56;border-radius:8px;padding:10px 13px">'
+                    f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Off-Peak Hours Avg &nbsp;·&nbsp; 20:00–08:00 UTC</p>'
+                    f'<p style="margin:4px 0 0;font-size:20px;font-weight:700;color:#E6EDF3;font-family:JetBrains Mono,monospace">€{dam_offpk:.2f}/MWh</p>'
+                    f'</div>'
+                    f'<div style="flex:0.6;min-width:120px;background:#1E2D42;border:1px solid #2D4A6B;border-left:3px solid {pk_col};border-radius:8px;padding:10px 13px">'
+                    f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Peak Premium</p>'
+                    f'<p style="margin:4px 0 0;font-size:20px;font-weight:700;color:{pk_col};font-family:JetBrains Mono,monospace">{pk_premium:+.1f}%</p>'
+                    f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">over off-peak &nbsp;·&nbsp; {pct_below_50:.0f}% of DA hours below €50</p>'
+                    f'</div>'
+                    f'</div>'
+                    f'<p style="margin:0 0 18px;font-size:10px;color:#444D56;font-style:italic">Peak/off-peak split based on 08:00–20:00 UTC. Peak premium reflects the shaped value vs flat-rate assumptions — relevant for PPA structuring (flat vs shaped/load-following contracts). High CV indicates wide intraday price swings; assets with flexible dispatch can capture more of the peak-hour premium.</p>'
+                )
+            st.markdown(dam_kpi_html, unsafe_allow_html=True)
 
         # ── Section 1: PPA & Budget Price Reference ──
         st.markdown('<p style="margin:0 0 10px;font-size:10px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">PPA &amp; Budget Price Reference — Period Percentiles</p>', unsafe_allow_html=True)
@@ -1350,6 +1484,73 @@ with tab3:
             layout_f["yaxis"]["title"] = dict(text="Flips / Day", font=dict(size=10, color="#8B949E"))
             ffig.update_layout(**layout_f)
             st.plotly_chart(ffig, use_container_width=True, config={"displayModeBar": False})
+
+        # ── DAM Distribution + DAM Hourly Profile ──
+        if not dam_s.empty:
+            col3, col4 = st.columns(2)
+            with col3:
+                dam_px_s = dam_s["Price"].dropna()
+                dam_p10  = float(dam_px_s.quantile(0.10))
+                dam_p50  = float(dam_px_s.quantile(0.50))
+                dam_p90  = float(dam_px_s.quantile(0.90))
+                dfig = go.Figure()
+                dfig.add_trace(go.Histogram(
+                    x=dam_px_s, nbinsx=40, name="DAM Price",
+                    marker_color="#7c3aed", opacity=0.75,
+                    hovertemplate="€%{x:.2f}<br>Count: %{y}<extra>DAM</extra>",
+                ))
+                for pval, plabel, pcol in [
+                    (dam_p10, "P10", "#FF4B4B"),
+                    (dam_p50, "P50", "#00D4FF"),
+                    (dam_p90, "P90", "#00CC33"),
+                ]:
+                    dfig.add_vline(x=pval, line_width=1, line_dash="dash", line_color=pcol,
+                                   annotation_text=f"{plabel} €{pval:.2f}",
+                                   annotation_font=dict(color=pcol, size=10))
+                layout_d = dark_layout("DAM PRICE DISTRIBUTION  ·  Period Percentiles", height=360)
+                layout_d["xaxis"]["title"] = dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))
+                layout_d["yaxis"]["title"] = dict(text="Frequency", font=dict(size=10, color="#8B949E"))
+                dfig.update_layout(**layout_d)
+                st.plotly_chart(dfig, use_container_width=True, config={"displayModeBar": False})
+                st.markdown(
+                    '<p style="margin:0 0 4px;font-size:10px;color:#444D56;font-style:italic">'
+                    f'DAM price distribution for the period. P10 (€{dam_p10:.2f}) = revenue downside reference for DA-indexed contracts; '
+                    f'P90 (€{dam_p90:.2f}) = upside. Use alongside the imbalance distribution to understand whether the basis widens or narrows at price extremes.</p>',
+                    unsafe_allow_html=True
+                )
+            with col4:
+                dam_hr_s = dam_s.copy()
+                dam_hr_s["Hour"] = dam_hr_s["StartTime"].dt.hour
+                dam_hr_avg = dam_hr_s.groupby("Hour")["Price"].mean()
+                hr_colors = [
+                    "#7c3aed" if (8 <= h < 20) else "#444D56"
+                    for h in dam_hr_avg.index
+                ]
+                hrfig = go.Figure()
+                hrfig.add_trace(go.Bar(
+                    x=[f"{h:02d}:00" for h in dam_hr_avg.index],
+                    y=dam_hr_avg.values,
+                    marker_color=hr_colors,
+                    name="DAM Hourly Avg",
+                    hovertemplate="<b>%{x}</b><br>DAM €%{y:.2f}/MWh<extra></extra>",
+                ))
+                hrfig.add_hline(y=float(dam_px_s.mean()), line_width=1, line_dash="dash",
+                                line_color="#8B949E",
+                                annotation_text=f"Avg €{float(dam_px_s.mean()):.2f}",
+                                annotation_font=dict(color="#8B949E", size=10))
+                layout_hr = dark_layout("DAM HOURLY PROFILE  ·  Peak (purple) vs Off-Peak (grey)", height=360)
+                layout_hr["xaxis"]["title"] = dict(text="Hour of Day (UTC)", font=dict(size=10, color="#8B949E"))
+                layout_hr["yaxis"]["title"] = dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))
+                layout_hr["xaxis"]["showspikes"] = False
+                hrfig.update_layout(**layout_hr)
+                st.plotly_chart(hrfig, use_container_width=True, config={"displayModeBar": False})
+                st.markdown(
+                    '<p style="margin:0 0 4px;font-size:10px;color:#444D56;font-style:italic">'
+                    'Average DAM price by hour (UTC). Purple = peak hours (08:00–20:00), grey = off-peak. '
+                    'Hours where DA prices are consistently high are the most valuable for assets with flexible dispatch. '
+                    'Used to assess the shaped vs flat value difference when structuring PPAs.</p>',
+                    unsafe_allow_html=True
+                )
 
         # ── Intraday Capture Price Profile ──
         st.markdown(

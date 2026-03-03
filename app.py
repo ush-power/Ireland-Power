@@ -3,10 +3,11 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, timezone
 from google.oauth2 import service_account
 from google.cloud import bigquery
-import base64, os
+import base64, os, re, requests
+import xml.etree.ElementTree as ET
 
 # ============================================================================
 # PAGE CONFIG
@@ -219,14 +220,60 @@ def fetch_imbalance(start: str, end: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_dam(start: str, end: str) -> pd.DataFrame:
-    query = f"""
-        SELECT StartTime,
-               CAST(Price AS FLOAT64) AS Price
-        FROM `semo-price-automation.semo_data.dam_prices_hourly`
-        WHERE DATE(TradeDate) BETWEEN '{start}' AND '{end}'
-        ORDER BY StartTime
-    """
-    df = get_bq_client().query(query).to_dataframe()
+    """Fetch Ireland SEM day-ahead prices from ENTSO-E Transparency Platform."""
+    api_key = st.secrets.get("ENTSOE_API_KEY", "")
+    if not api_key:
+        return pd.DataFrame(columns=["StartTime", "Price"])
+
+    start_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    end_dt   = datetime.strptime(end,   "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)
+
+    try:
+        r = requests.get(
+            "https://web-api.tp.entsoe.eu/api",
+            params={
+                "securityToken": api_key,
+                "documentType":  "A44",
+                "in_Domain":     "10Y1001A1001A59C",   # Ireland SEM
+                "out_Domain":    "10Y1001A1001A59C",
+                "periodStart":   start_dt.strftime("%Y%m%d%H%M"),
+                "periodEnd":     end_dt.strftime("%Y%m%d%H%M"),
+            },
+            timeout=30,
+        )
+        r.raise_for_status()
+    except Exception:
+        return pd.DataFrame(columns=["StartTime", "Price"])
+
+    root = ET.fromstring(r.content)
+    ns_match = re.match(r"\{(.+?)\}", root.tag)
+    ns  = {"n": ns_match.group(1)} if ns_match else {}
+    pre = "n:" if ns else ""
+
+    rows = []
+    for ts in root.findall(f"{pre}TimeSeries", ns):
+        for period in ts.findall(f"{pre}Period", ns):
+            t_start_el = period.find(f"{pre}timeInterval/{pre}start", ns)
+            res_el     = period.find(f"{pre}resolution", ns)
+            if t_start_el is None or res_el is None:
+                continue
+            t_start = datetime.strptime(t_start_el.text, "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc)
+            res_min = 60 if "60M" in res_el.text else 30
+            for point in period.findall(f"{pre}Point", ns):
+                pos_el   = point.find(f"{pre}position", ns)
+                price_el = point.find(f"{pre}price.amount", ns)
+                if pos_el is None or price_el is None:
+                    continue
+                pos = int(pos_el.text) - 1
+                rows.append({
+                    "StartTime": t_start + timedelta(minutes=pos * res_min),
+                    "Price":     float(price_el.text),
+                })
+
+    if not rows:
+        return pd.DataFrame(columns=["StartTime", "Price"])
+
+    df = pd.DataFrame(rows).sort_values("StartTime").reset_index(drop=True)
     df["StartTime"] = pd.to_datetime(df["StartTime"])
     return df
 

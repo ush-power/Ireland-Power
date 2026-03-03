@@ -1058,6 +1058,116 @@ with tab2:
             })
             st.plotly_chart(hfig, use_container_width=True, config={"displayModeBar": False})
 
+        # ── DAM Price Trend Over Time ──
+        if not dam_h.empty:
+            dam_tr = dam_h.copy()
+            dam_tr["Date"] = pd.to_datetime(dam_tr["StartTime"].dt.date)
+            dam_da = (dam_tr.groupby("Date")["Price"]
+                      .agg(Avg="mean", High="max", Low="min")
+                      .reset_index())
+            dam_da["Roll7"]  = dam_da["Avg"].rolling(7, min_periods=1).mean()
+            dam_da["DoD"]    = dam_da["Avg"].diff()
+            dam_da["DoDPct"] = dam_da["Avg"].pct_change() * 100
+
+            period_avg_d = float(dam_da["Avg"].mean())
+            n_d = len(dam_da)
+            first_avg  = float(dam_da["Avg"].iloc[:max(n_d // 2, 1)].mean())
+            second_avg = float(dam_da["Avg"].iloc[max(n_d // 2, 1):].mean()) if n_d > 1 else first_avg
+            trend_pct  = ((second_avg / first_avg) - 1) * 100 if first_avg > 0 else 0
+            trend_lbl  = f"↑ Rising +{trend_pct:.1f}%" if trend_pct > 3 else f"↓ Falling {trend_pct:.1f}%" if trend_pct < -3 else f"→ Flat {trend_pct:+.1f}%"
+            trend_col  = "#00CC33" if trend_pct > 3 else "#FF4B4B" if trend_pct < -3 else "#8B949E"
+            roll7_now  = float(dam_da["Roll7"].iloc[-1])
+            roll7_vs   = roll7_now - period_avg_d
+            roll7_col  = "#00CC33" if roll7_vs > 0 else "#FF4B4B"
+            dod_val    = float(dam_da["DoD"].iloc[-1]) if len(dam_da) > 1 else 0.0
+            dod_pct    = float(dam_da["DoDPct"].iloc[-1]) if len(dam_da) > 1 else 0.0
+            dod_col    = "#00CC33" if dod_val >= 0 else "#FF4B4B"
+
+            st.markdown(
+                f'<p style="margin:18px 0 10px;font-size:10px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Day Ahead Market — Price Trend</p>'
+                f'<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">'
+                f'<div style="flex:1;min-width:170px;background:#1A1430;border:1px solid #3D2A6B;border-left:3px solid {trend_col};border-radius:8px;padding:11px 14px">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Period Trend</p>'
+                f'<p style="margin:5px 0 0;font-size:20px;font-weight:700;color:{trend_col};font-family:JetBrains Mono,monospace">{trend_lbl}</p>'
+                f'<p style="margin:3px 0 0;font-size:10px;color:#8B949E">First-half avg €{first_avg:.2f} → Second-half avg €{second_avg:.2f}</p>'
+                f'</div>'
+                f'<div style="flex:1;min-width:170px;background:#1A1430;border:1px solid #3D2A6B;border-left:3px solid {roll7_col};border-radius:8px;padding:11px 14px">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">7-Day Rolling Avg</p>'
+                f'<p style="margin:5px 0 0;font-size:20px;font-weight:700;color:#E6EDF3;font-family:JetBrains Mono,monospace">€{roll7_now:.2f}</p>'
+                f'<p style="margin:3px 0 0;font-size:10px;color:{roll7_col};font-family:JetBrains Mono,monospace">{roll7_vs:+.2f} vs period avg €{period_avg_d:.2f}</p>'
+                f'</div>'
+                f'<div style="flex:1;min-width:170px;background:#1A1430;border:1px solid #3D2A6B;border-left:3px solid {dod_col};border-radius:8px;padding:11px 14px">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Latest Day-on-Day Change</p>'
+                f'<p style="margin:5px 0 0;font-size:20px;font-weight:700;color:{dod_col};font-family:JetBrains Mono,monospace">{dod_val:+.2f} €/MWh</p>'
+                f'<p style="margin:3px 0 0;font-size:10px;color:{dod_col};font-family:JetBrains Mono,monospace">{dod_pct:+.1f}% vs prior day</p>'
+                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+
+            # Range band + daily avg + 7-day rolling avg chart
+            tfig = go.Figure()
+            tfig.add_trace(go.Scatter(
+                x=pd.concat([dam_da["Date"], dam_da["Date"].iloc[::-1]]),
+                y=pd.concat([dam_da["High"], dam_da["Low"].iloc[::-1]]),
+                fill="toself", fillcolor="rgba(124,58,237,0.12)",
+                line=dict(color="rgba(0,0,0,0)"),
+                name="Daily High/Low Range", hoverinfo="skip",
+            ))
+            marker_colors = ["#00CC33" if v >= 0 else "#FF4B4B" for v in dam_da["DoD"].fillna(0)]
+            tfig.add_trace(go.Scatter(
+                x=dam_da["Date"], y=dam_da["Avg"],
+                mode="lines+markers", name="Daily Avg",
+                line=dict(color="#7c3aed", width=1.5),
+                marker=dict(size=5, color=marker_colors),
+                hovertemplate="<b>%{x|%d %b}</b><br>DAM Avg €%{y:.2f}/MWh<extra></extra>",
+            ))
+            tfig.add_trace(go.Scatter(
+                x=dam_da["Date"], y=dam_da["Roll7"],
+                mode="lines", name="7-Day Rolling Avg",
+                line=dict(color="#00D4FF", width=2.5),
+                hovertemplate="<b>%{x|%d %b}</b><br>7d Avg €%{y:.2f}/MWh<extra>7d MA</extra>",
+            ))
+            tfig.add_hline(y=period_avg_d, line_width=1, line_dash="dash", line_color="#444D56",
+                           annotation_text=f"Period Avg €{period_avg_d:.2f}",
+                           annotation_font=dict(color="#8B949E", size=10))
+            layout_t = dark_layout("DAM PRICE TREND  ·  Daily Range (band) · Daily Avg (dots) · 7-Day Rolling Avg (cyan)", height=360)
+            layout_t["xaxis"]["title"] = dict(text="Date", font=dict(size=10, color="#8B949E"))
+            layout_t["yaxis"]["title"] = dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))
+            tfig.update_layout(**layout_t)
+            st.plotly_chart(tfig, use_container_width=True, config={"displayModeBar": False})
+
+            # DAM hour × day heatmap
+            dam_tr["Hour"] = dam_tr["StartTime"].dt.hour
+            dam_tr["Day"]  = dam_tr["StartTime"].dt.strftime("%d %b")
+            dam_pivot = (dam_tr.groupby(["Day", "Hour"])["Price"]
+                         .mean().reset_index()
+                         .pivot(index="Day", columns="Hour", values="Price"))
+            dmfig = go.Figure(go.Heatmap(
+                z=dam_pivot.values,
+                x=[f"{h:02d}:00" for h in dam_pivot.columns],
+                y=list(dam_pivot.index),
+                colorscale="Purples",
+                colorbar=dict(title=dict(text="€/MWh", font=dict(color="#8B949E", size=10)),
+                              tickfont=dict(color="#8B949E", size=9), thickness=10),
+                hovertemplate="<b>%{y}  %{x}</b><br>DAM €%{z:.2f}/MWh<extra></extra>",
+            ))
+            dmfig.update_layout(**{
+                **dark_layout("DAM PRICE HEATMAP  ·  HOUR × DAY",
+                              height=max(280, len(dam_pivot) * 26 + 80)),
+                "xaxis": {**dark_layout("")["xaxis"], "showspikes": False,
+                          "tickangle": -45, "tickfont": dict(size=9, color="#8B949E")},
+                "yaxis": {**dark_layout("")["yaxis"], "showspikes": False,
+                          "tickfont": dict(size=9, color="#8B949E")},
+            })
+            st.plotly_chart(dmfig, use_container_width=True, config={"displayModeBar": False})
+            st.markdown(
+                '<p style="margin:0 0 4px;font-size:10px;color:#444D56;font-style:italic">'
+                'Purple intensity = higher DAM price. Darker columns indicate persistently expensive hours; darker rows indicate high-price days. '
+                'Compare with the imbalance heatmap above to identify whether intraday DA and imbalance price shapes align.</p>',
+                unsafe_allow_html=True
+            )
+
         # Daily summary table with sparklines
         st.markdown("<p style='font-size:11px;font-weight:600;color:#8B949E;"
                     "text-transform:uppercase;letter-spacing:0.1em;"

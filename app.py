@@ -284,6 +284,77 @@ def fetch_dam(start: str, end: str) -> pd.DataFrame:
     return df
 
 
+# ─── EirGrid Smart Grid Dashboard helpers ────────────────────────────────────
+_EIRGRID_BASE = "https://www.smartgriddashboard.com/DashboardService.svc/csv"
+_EIRGRID_HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "*/*",
+    "Referer": "https://www.smartgriddashboard.com/",
+}
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_eirgrid(start: str, end: str) -> pd.DataFrame:
+    """Fetch EirGrid generation mix data (wind, total generation, demand,
+    CO2 intensity, interconnection) for the given date range (YYYY-MM-DD).
+    Returns a DataFrame indexed by UTC timestamp with 15-min resolution,
+    then resampled to hourly for display.
+    Returns empty DataFrame on failure."""
+    from datetime import datetime as _dt
+    try:
+        s = _dt.strptime(start, "%Y-%m-%d")
+        e = _dt.strptime(end,   "%Y-%m-%d")
+        datefrom = s.strftime("%d-%b-%Y")
+        dateto   = e.strftime("%d-%b-%Y")
+    except Exception:
+        return pd.DataFrame()
+
+    areas = {
+        "generationactual": ["Generation_MW"],
+        "windactual":       ["Wind_Forecast_MW", "Wind_MW"],
+        "demandactual":     ["Demand_MW", "Demand_Forecast_MW"],
+        "co2intensity":     ["CO2_Intensity"],
+        "co2emission":      ["CO2_Emission"],
+        "interconnection":  ["Interconnection_Net_MW", "EWIC_MW", "Moyle_MW"],
+    }
+
+    frames = {}
+    for area, col_names in areas.items():
+        try:
+            url = (f"{_EIRGRID_BASE}?area={area}&region=ROI"
+                   f"&datefrom={datefrom}&dateto={dateto}")
+            req = requests.get(url, headers=_EIRGRID_HEADERS, timeout=20)
+            req.raise_for_status()
+            text = req.text.strip()
+            if not text or text == "Invalid Operation":
+                continue
+            from io import StringIO
+            raw = pd.read_csv(StringIO(text))
+            raw.columns = [c.strip() for c in raw.columns]
+            time_col = raw.columns[0]
+            raw["ts"] = pd.to_datetime(raw[time_col], format="%d %B %Y %H:%M",
+                                       errors="coerce")
+            raw = raw.dropna(subset=["ts"]).set_index("ts")
+            # Keep numeric columns only, renaming to friendly names
+            numeric_cols = [c for c in raw.columns if c != time_col and c != "REGION"]
+            for i, nc in enumerate(numeric_cols):
+                if i < len(col_names):
+                    raw = raw.rename(columns={nc: col_names[i]})
+            keep = [cn for cn in col_names if cn in raw.columns]
+            if keep:
+                frames[area] = raw[keep].apply(pd.to_numeric, errors="coerce")
+        except Exception:
+            continue
+
+    if not frames:
+        return pd.DataFrame()
+
+    combined = pd.concat(frames.values(), axis=1)
+    combined = combined.resample("1h").mean()
+    combined.index.name = "Timestamp"
+    return combined.reset_index()
+
+
 # ─── Aurora Energy Research helpers ──────────────────────────────────────────
 _AURORA_REGION = "irl"   # Ireland 3-letter ISO code used in Aurora Origin
 
@@ -1949,6 +2020,226 @@ with tab2:
                     'Persistent red periods should be factored into PPA risk margin and management account commentary.</p>',
                     unsafe_allow_html=True
                 )
+
+        # ── EirGrid Generation Mix ──────────────────────────────────────────
+        st.markdown(
+            '<hr style="border:none;border-top:1px solid #1E2D42;margin:24px 0 18px">',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p style="font-size:10px;font-weight:600;color:#8B949E;text-transform:uppercase;'
+            'letter-spacing:0.1em;margin:0 0 12px">Grid Generation Mix  ·  EirGrid</p>',
+            unsafe_allow_html=True,
+        )
+        with st.spinner("Loading EirGrid data…"):
+            eg_df = fetch_eirgrid(start_str, end_str)
+
+        if eg_df.empty:
+            st.info("EirGrid data unavailable for this period.")
+        else:
+            eg = eg_df.copy()
+            eg["Date"] = pd.to_datetime(eg["Timestamp"]).dt.date
+
+            # Daily aggregates
+            agg_cols = {c: "mean" for c in eg.columns if c not in ("Timestamp", "Date")}
+            eg_daily = eg.groupby("Date").agg(agg_cols).reset_index()
+            eg_daily["Date"] = pd.to_datetime(eg_daily["Date"])
+
+            has_wind  = "Wind_MW" in eg_daily.columns
+            has_gen   = "Generation_MW" in eg_daily.columns
+            has_dem   = "Demand_MW" in eg_daily.columns
+            has_co2i  = "CO2_Intensity" in eg_daily.columns
+            has_inter = "Interconnection_Net_MW" in eg_daily.columns
+
+            if has_wind and has_gen:
+                eg_daily["Other_MW"]     = (eg_daily["Generation_MW"] - eg_daily["Wind_MW"]).clip(lower=0)
+                eg_daily["Wind_Pct"]     = (eg_daily["Wind_MW"] / eg_daily["Generation_MW"] * 100).clip(0, 100)
+                avg_wind_pct = float(eg_daily["Wind_Pct"].mean())
+                max_wind_pct = float(eg_daily["Wind_Pct"].max())
+                min_wind_pct = float(eg_daily["Wind_Pct"].min())
+            else:
+                avg_wind_pct = max_wind_pct = min_wind_pct = None
+
+            avg_gen   = float(eg_daily["Generation_MW"].mean()) if has_gen else None
+            avg_dem   = float(eg_daily["Demand_MW"].mean())     if has_dem else None
+            avg_co2i  = float(eg_daily["CO2_Intensity"].mean()) if has_co2i else None
+            avg_inter = float(eg_daily["Interconnection_Net_MW"].mean()) if has_inter else None
+
+            # KPI ribbon
+            kpi_items = []
+            if avg_wind_pct is not None:
+                wp_col = "#00CC33" if avg_wind_pct > 50 else "#F59E0B" if avg_wind_pct > 30 else "#FF4B4B"
+                kpi_items.append((f"{avg_wind_pct:.1f}%",  "Avg Wind Penetration", wp_col,
+                                  f"Max {max_wind_pct:.1f}% · Min {min_wind_pct:.1f}%"))
+            if avg_gen is not None:
+                kpi_items.append((f"{avg_gen:.0f} MW", "Avg Generation", "#00D4FF",
+                                  f"Avg Demand {avg_dem:.0f} MW" if avg_dem else ""))
+            if avg_co2i is not None:
+                co2_col = "#00CC33" if avg_co2i < 150 else "#F59E0B" if avg_co2i < 300 else "#FF4B4B"
+                kpi_items.append((f"{avg_co2i:.0f}", "Avg CO₂ Intensity (gCO₂/kWh)", co2_col,
+                                  "Low = high renewables · High = high fossil"))
+            if avg_inter is not None:
+                sign = "Export" if avg_inter > 0 else "Import"
+                int_col = "#F59E0B" if avg_inter > 0 else "#7c3aed"
+                kpi_items.append((f"{avg_inter:+.0f} MW", f"Avg Interconnection ({sign})", int_col,
+                                  "Positive = net export to GB/NI"))
+
+            kpi_html = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">'
+            for val, lbl, col, sub in kpi_items:
+                kpi_html += (
+                    f'<div style="flex:1;min-width:140px;background:#141F2E;border:1px solid #2D4A6B;'
+                    f'border-left:3px solid {col};border-radius:8px;padding:10px 14px">'
+                    f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">{lbl}</p>'
+                    f'<p style="margin:5px 0 0;font-size:22px;font-weight:700;color:{col};font-family:JetBrains Mono,monospace">{val}</p>'
+                    f'<p style="margin:2px 0 0;font-size:10px;color:#555D68">{sub}</p>'
+                    f'</div>'
+                )
+            kpi_html += '</div>'
+            st.markdown(kpi_html, unsafe_allow_html=True)
+
+            # Stacked area: Wind vs Other generation
+            if has_wind and has_gen:
+                gfig = go.Figure()
+                gfig.add_trace(go.Scatter(
+                    x=eg_daily["Date"], y=eg_daily["Other_MW"],
+                    mode="lines", name="Other Generation",
+                    line=dict(color="rgba(255,140,0,0.8)", width=0),
+                    fill="tozeroy", fillcolor="rgba(255,140,0,0.25)",
+                    stackgroup="gen",
+                    hovertemplate="<b>%{x|%d %b}</b><br>Other €%{y:.0f} MW<extra></extra>",
+                ))
+                gfig.add_trace(go.Scatter(
+                    x=eg_daily["Date"], y=eg_daily["Wind_MW"],
+                    mode="lines", name="Wind",
+                    line=dict(color="rgba(0,204,51,0.9)", width=0),
+                    fill="tonexty", fillcolor="rgba(0,204,51,0.3)",
+                    stackgroup="gen",
+                    hovertemplate="<b>%{x|%d %b}</b><br>Wind %{y:.0f} MW<extra></extra>",
+                ))
+                if has_dem:
+                    gfig.add_trace(go.Scatter(
+                        x=eg_daily["Date"], y=eg_daily["Demand_MW"],
+                        mode="lines", name="Demand",
+                        line=dict(color="#00D4FF", width=2, dash="dot"),
+                        hovertemplate="<b>%{x|%d %b}</b><br>Demand %{y:.0f} MW<extra></extra>",
+                    ))
+                lay_g = dark_layout(
+                    "GENERATION MIX  ·  Wind (green) vs Other (amber)  ·  Demand (cyan dashed)",
+                    height=340,
+                )
+                lay_g["xaxis"]["title"] = dict(text="Date", font=dict(size=10, color="#8B949E"))
+                lay_g["yaxis"]["title"] = dict(text="MW (Hourly Avg)", font=dict(size=10, color="#8B949E"))
+                gfig.update_layout(**lay_g)
+                st.plotly_chart(gfig, use_container_width=True, config={"displayModeBar": False})
+
+            # Two columns: Wind penetration % | CO2 intensity / interconnection
+            gcol1, gcol2 = st.columns(2)
+
+            with gcol1:
+                if has_wind and has_gen:
+                    wp_color = ["#00CC33" if v > 50 else "#F59E0B" if v > 30 else "#FF4B4B"
+                                for v in eg_daily["Wind_Pct"]]
+                    wpfig = go.Figure()
+                    wpfig.add_trace(go.Bar(
+                        x=eg_daily["Date"], y=eg_daily["Wind_Pct"],
+                        name="Wind %", marker_color=wp_color,
+                        hovertemplate="<b>%{x|%d %b}</b><br>Wind %{y:.1f}%<extra></extra>",
+                    ))
+                    wpfig.add_hline(y=avg_wind_pct, line_width=1, line_dash="dash",
+                                    line_color="#444D56",
+                                    annotation_text=f"Avg {avg_wind_pct:.1f}%",
+                                    annotation_font=dict(color="#8B949E", size=9))
+                    lay_wp = dark_layout("DAILY WIND PENETRATION  ·  % of Total Generation", height=280)
+                    lay_wp["yaxis"]["title"] = dict(text="Wind %", font=dict(size=10, color="#8B949E"))
+                    lay_wp["yaxis"]["range"] = [0, 100]
+                    wpfig.update_layout(**lay_wp)
+                    st.plotly_chart(wpfig, use_container_width=True, config={"displayModeBar": False})
+
+            with gcol2:
+                if has_co2i:
+                    co2_colors = [
+                        "#00CC33" if v < 150 else "#F59E0B" if v < 300 else "#FF4B4B"
+                        for v in eg_daily["CO2_Intensity"]
+                    ]
+                    co2fig = go.Figure()
+                    co2fig.add_trace(go.Bar(
+                        x=eg_daily["Date"], y=eg_daily["CO2_Intensity"],
+                        name="CO₂ Intensity", marker_color=co2_colors,
+                        hovertemplate="<b>%{x|%d %b}</b><br>%{y:.0f} gCO₂/kWh<extra></extra>",
+                    ))
+                    co2fig.add_hline(y=avg_co2i, line_width=1, line_dash="dash",
+                                     line_color="#444D56",
+                                     annotation_text=f"Avg {avg_co2i:.0f} gCO₂/kWh",
+                                     annotation_font=dict(color="#8B949E", size=9))
+                    lay_co2 = dark_layout("DAILY CO₂ INTENSITY  ·  Green = low (high renewables)", height=280)
+                    lay_co2["yaxis"]["title"] = dict(text="gCO₂/kWh", font=dict(size=10, color="#8B949E"))
+                    co2fig.update_layout(**lay_co2)
+                    st.plotly_chart(co2fig, use_container_width=True, config={"displayModeBar": False})
+                elif has_inter:
+                    int_colors = ["#F59E0B" if v > 0 else "#7c3aed"
+                                  for v in eg_daily["Interconnection_Net_MW"]]
+                    intfig = go.Figure()
+                    intfig.add_trace(go.Bar(
+                        x=eg_daily["Date"], y=eg_daily["Interconnection_Net_MW"],
+                        name="Interconnection", marker_color=int_colors,
+                        hovertemplate="<b>%{x|%d %b}</b><br>%{y:+.0f} MW<extra></extra>",
+                    ))
+                    intfig.add_hline(y=0, line_width=1, line_color="#444D56")
+                    lay_int = dark_layout("INTERCONNECTION FLOW  ·  Positive = Export", height=280)
+                    lay_int["yaxis"]["title"] = dict(text="MW", font=dict(size=10, color="#8B949E"))
+                    intfig.update_layout(**lay_int)
+                    st.plotly_chart(intfig, use_container_width=True, config={"displayModeBar": False})
+
+            # Interconnection chart (if CO2 was shown above)
+            if has_co2i and has_inter:
+                intfig2 = go.Figure()
+                int_colors2 = ["#F59E0B" if v > 0 else "#7c3aed"
+                               for v in eg_daily["Interconnection_Net_MW"]]
+                intfig2.add_trace(go.Bar(
+                    x=eg_daily["Date"], y=eg_daily["Interconnection_Net_MW"],
+                    name="Net Interconnection", marker_color=int_colors2,
+                    hovertemplate="<b>%{x|%d %b}</b><br>%{y:+.0f} MW<extra></extra>",
+                ))
+                if "EWIC_MW" in eg_daily.columns:
+                    intfig2.add_trace(go.Scatter(
+                        x=eg_daily["Date"], y=eg_daily["EWIC_MW"],
+                        mode="lines", name="EWIC (Ireland–GB)",
+                        line=dict(color="#00D4FF", width=1.5),
+                        hovertemplate="<b>%{x|%d %b}</b><br>EWIC %{y:+.0f} MW<extra></extra>",
+                    ))
+                if "Moyle_MW" in eg_daily.columns:
+                    intfig2.add_trace(go.Scatter(
+                        x=eg_daily["Date"], y=eg_daily["Moyle_MW"],
+                        mode="lines", name="Moyle (Ireland–NI)",
+                        line=dict(color="#7c3aed", width=1.5),
+                        hovertemplate="<b>%{x|%d %b}</b><br>Moyle %{y:+.0f} MW<extra></extra>",
+                    ))
+                intfig2.add_hline(y=0, line_width=1, line_color="#444D56")
+                lay_int2 = dark_layout(
+                    "INTERCONNECTION FLOWS  ·  Bars = Net · Cyan = EWIC (GB) · Purple = Moyle (NI)  ·  Positive = Export",
+                    height=300,
+                )
+                lay_int2["xaxis"]["title"] = dict(text="Date", font=dict(size=10, color="#8B949E"))
+                lay_int2["yaxis"]["title"] = dict(text="MW", font=dict(size=10, color="#8B949E"))
+                lay_int2["yaxis"]["zeroline"] = True
+                lay_int2["yaxis"]["zerolinecolor"] = "#333"
+                intfig2.update_layout(**lay_int2)
+                st.plotly_chart(intfig2, use_container_width=True, config={"displayModeBar": False})
+                st.markdown(
+                    '<p style="margin:0 0 4px;font-size:10px;color:#444D56;font-style:italic">'
+                    'Amber bars = net export (Ireland exporting to GB/NI). Purple = net import. '
+                    'EWIC connects Ireland to Great Britain (500 MW capacity); '
+                    'Moyle connects to Northern Ireland (450 MW). '
+                    'High import periods indicate domestic generation shortfall.</p>',
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown(
+                f'<p style="margin:8px 0 0;font-size:10px;color:#444D56;font-style:italic">'
+                f'Source: EirGrid Smart Grid Dashboard · {len(eg_df):,} hourly observations · '
+                f'Data aggregated to daily averages for display</p>',
+                unsafe_allow_html=True,
+            )
 
 
 # ════════════════════════════════════════════════════════════════════════════

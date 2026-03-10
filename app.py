@@ -826,9 +826,9 @@ with tab1:
         imb_df = fetch_imbalance(start_str, end_str)
         dam_df = fetch_dam(start_str, end_str)
 
-    if imb_df.empty:
-        st.warning("No imbalance data for the selected period.")
-    else:
+    if imb_df.empty and dam_df.empty:
+        st.warning("No data for the selected period.")
+    elif not imb_df.empty:
         latest       = imb_df.iloc[-1]
         latest_price = latest["ImbalancePrice"]
         latest_niv   = latest["NetImbalanceVolume"]
@@ -1171,6 +1171,82 @@ with tab1:
         )
         st.download_button("↓  Export CSV", data=imb_df.to_csv(index=False),
                            file_name=f"imbalance_{start_str}_{end_str}.csv", mime="text/csv")
+
+    else:
+        # DAM data only — imbalance settlement not yet available for this period
+        st.markdown(
+            '<div style="background:#141F2E;border:1px solid #2D4A6B;border-left:3px solid #7c3aed;'
+            'border-radius:8px;padding:10px 16px;margin-bottom:16px">'
+            '<p style="margin:0;font-size:11px;color:#8B949E;font-style:italic">'
+            'Imbalance settlement data is not yet available for this period. '
+            'Showing Day Ahead Market prices only.</p></div>',
+            unsafe_allow_html=True,
+        )
+        if not dam_df.empty:
+            dam_px   = dam_df["Price"].dropna()
+            dam_lat  = float(dam_df.iloc[-1]["Price"])
+            dam_avg  = float(dam_px.mean())
+            dam_high = float(dam_px.max())
+            dam_low  = float(dam_px.min())
+            dam_std  = float(dam_px.std())
+            dam_cv   = dam_std / dam_avg * 100 if dam_avg > 0 else 0
+            cv_col   = "#FF4B4B" if dam_cv > 60 else "#F59E0B" if dam_cv > 35 else "#00CC33"
+            st.markdown(f"""
+            <div style="display:flex;gap:10px;margin-bottom:18px;flex-wrap:wrap">
+              <div style="flex:1.6;min-width:200px;background:#1A1430;border:1px solid #3D2A6B;
+                          border-top:2px solid #7c3aed;border-radius:10px;padding:14px 18px">
+                <p style="margin:0;font-size:10px;font-weight:600;color:#7c3aed;
+                           text-transform:uppercase;letter-spacing:0.1em">Latest DAM Price</p>
+                <p style="margin:8px 0 0;font-size:34px;font-weight:700;color:#E6EDF3;
+                           font-family:'JetBrains Mono',monospace">€{dam_lat:.2f}</p>
+                <p style="margin:4px 0 0;font-size:10px;color:#8B949E;
+                           font-family:'JetBrains Mono',monospace">
+                  {dam_df.iloc[-1]["StartTime"].strftime("%d %b %Y, %H:%M")}</p>
+              </div>
+              <div style="flex:1;min-width:140px;background:#1E2D42;border:1px solid #2D4A6B;
+                          border-top:2px solid #00D4FF;border-radius:10px;padding:14px 18px">
+                <p style="margin:0;font-size:10px;font-weight:600;color:#8B949E;
+                           text-transform:uppercase;letter-spacing:0.1em">Period Average</p>
+                <p style="margin:8px 0 0;font-size:22px;font-weight:700;color:#00D4FF;
+                           font-family:'JetBrains Mono',monospace">€{dam_avg:.2f}</p>
+                <p style="margin:4px 0 0;font-size:10px;color:#8B949E">EUR / MWh</p>
+              </div>
+              <div style="flex:1;min-width:140px;background:#1E2D42;border:1px solid #2D4A6B;
+                          border-top:2px solid #FF4B4B;border-radius:10px;padding:14px 18px">
+                <p style="margin:0;font-size:10px;font-weight:600;color:#8B949E;
+                           text-transform:uppercase;letter-spacing:0.1em">Period High</p>
+                <p style="margin:8px 0 0;font-size:22px;font-weight:700;color:#FF4B4B;
+                           font-family:'JetBrains Mono',monospace">€{dam_high:.2f}</p>
+                <p style="margin:4px 0 0;font-size:10px;color:#8B949E">EUR / MWh</p>
+              </div>
+              <div style="flex:1;min-width:140px;background:#1E2D42;border:1px solid #2D4A6B;
+                          border-top:2px solid #00CC33;border-radius:10px;padding:14px 18px">
+                <p style="margin:0;font-size:10px;font-weight:600;color:#8B949E;
+                           text-transform:uppercase;letter-spacing:0.1em">Period Low</p>
+                <p style="margin:8px 0 0;font-size:22px;font-weight:700;color:#00CC33;
+                           font-family:'JetBrains Mono',monospace">€{dam_low:.2f}</p>
+                <p style="margin:4px 0 0;font-size:10px;color:#8B949E">EUR / MWh</p>
+              </div>
+              <div style="flex:1;min-width:140px;background:#1E2D42;border:1px solid #2D4A6B;
+                          border-top:2px solid {cv_col};border-radius:10px;padding:14px 18px">
+                <p style="margin:0;font-size:10px;font-weight:600;color:#8B949E;
+                           text-transform:uppercase;letter-spacing:0.1em">Volatility (CV)</p>
+                <p style="margin:8px 0 0;font-size:22px;font-weight:700;color:{cv_col};
+                           font-family:'JetBrains Mono',monospace">{dam_cv:.0f}%</p>
+                <p style="margin:4px 0 0;font-size:10px;color:#8B949E">σ / avg</p>
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+            dam_fig = go.Figure()
+            dam_fig.add_trace(go.Scatter(
+                x=dam_df["StartTime"], y=dam_df["Price"],
+                mode="lines", name="DAM Price",
+                line=dict(color="#7c3aed", width=2),
+                fill="tozeroy", fillcolor="rgba(124,58,237,0.07)",
+                hovertemplate="<b>%{x|%d %b %H:%M}</b><br>€%{y:.2f}/MWh<extra>DAM</extra>",
+            ))
+            dam_fig.update_layout(**dark_layout("DAY AHEAD MARKET PRICE  ·  HOURLY", height=400))
+            st.plotly_chart(dam_fig, use_container_width=True, config={"displayModeBar": False})
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1683,9 +1759,9 @@ with tab3:
         imb_s = fetch_imbalance(start_str, end_str)
         dam_s = fetch_dam(start_str, end_str)
 
-    if imb_s.empty:
+    if imb_s.empty and dam_s.empty:
         st.warning("No data for the selected period.")
-    else:
+    elif not imb_s.empty:
         prices   = imb_s["ImbalancePrice"].dropna()
         sbp_mask = imb_s["NetImbalanceVolume"] < 0
         sbp_p    = imb_s[sbp_mask]["ImbalancePrice"].dropna()
@@ -2087,6 +2163,84 @@ with tab3:
             'Hours with wide boxes and high prices are the most impactful for PPA capture price assumptions.</p>',
             unsafe_allow_html=True
         )
+
+    else:
+        # DAM data only — imbalance settlement not yet available for this period
+        st.markdown(
+            '<div style="background:#141F2E;border:1px solid #2D4A6B;border-left:3px solid #7c3aed;'
+            'border-radius:8px;padding:10px 16px;margin-bottom:16px">'
+            '<p style="margin:0;font-size:11px;color:#8B949E;font-style:italic">'
+            'Imbalance settlement data is not yet available for this period. '
+            'Showing Day Ahead Market analysis only.</p></div>',
+            unsafe_allow_html=True,
+        )
+        if not dam_s.empty:
+            dam_px       = dam_s["Price"].dropna()
+            dam_avg_kpi  = float(dam_px.mean())
+            dam_high_kpi = float(dam_px.max())
+            dam_low_kpi  = float(dam_px.min())
+            dam_std_kpi  = float(dam_px.std())
+            dam_cv_kpi   = dam_std_kpi / dam_avg_kpi * 100 if dam_avg_kpi > 0 else 0
+            pct_above_100 = float((dam_px > 100).mean() * 100)
+            pct_below_50  = float((dam_px < 50).mean() * 100)
+
+            dam_s_hr        = dam_s.copy()
+            dam_s_hr["Hour"] = dam_s_hr["StartTime"].dt.hour
+            peak_px   = dam_s_hr[(dam_s_hr["Hour"] >= 8) & (dam_s_hr["Hour"] < 20)]["Price"]
+            offpk_px  = dam_s_hr[(dam_s_hr["Hour"] < 8) | (dam_s_hr["Hour"] >= 20)]["Price"]
+            dam_peak  = float(peak_px.mean())  if not peak_px.empty  else None
+            dam_offpk = float(offpk_px.mean()) if not offpk_px.empty else None
+            pk_premium = ((dam_peak / dam_offpk) - 1) * 100 if (dam_peak and dam_offpk and dam_offpk > 0) else None
+
+            pk_col   = "#00CC33" if pk_premium and pk_premium > 0 else "#8B949E"
+            cv_col   = "#FF4B4B" if dam_cv_kpi > 60 else "#F59E0B" if dam_cv_kpi > 35 else "#00CC33"
+            h100_col = "#FF4B4B" if pct_above_100 > 20 else "#F59E0B" if pct_above_100 > 5 else "#00CC33"
+
+            st.markdown('<p style="margin:0 0 10px;font-size:10px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Day Ahead Market — Period Summary</p>', unsafe_allow_html=True)
+            dam_kpi_html = (
+                f'<div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap">'
+                f'<div style="flex:1.3;min-width:130px;background:#1A1430;border:1px solid #3D2A6B;border-top:2px solid #7c3aed;border-radius:8px;padding:11px 13px">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#7c3aed;text-transform:uppercase;letter-spacing:0.1em">DAM Period Avg</p>'
+                f'<p style="margin:5px 0 0;font-size:24px;font-weight:700;color:#E6EDF3;font-family:JetBrains Mono,monospace">€{dam_avg_kpi:.2f}</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">EUR / MWh</p></div>'
+                f'<div style="flex:1;min-width:110px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid #FF4B4B;border-radius:8px;padding:11px 13px">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">DAM High</p>'
+                f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:#FF4B4B;font-family:JetBrains Mono,monospace">€{dam_high_kpi:.2f}</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">Period peak</p></div>'
+                f'<div style="flex:1;min-width:110px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid #00CC33;border-radius:8px;padding:11px 13px">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">DAM Low</p>'
+                f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:#00CC33;font-family:JetBrains Mono,monospace">€{dam_low_kpi:.2f}</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">Period floor</p></div>'
+                f'<div style="flex:1;min-width:110px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid {cv_col};border-radius:8px;padding:11px 13px">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">DAM Volatility</p>'
+                f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:{cv_col};font-family:JetBrains Mono,monospace">{dam_cv_kpi:.0f}%</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">CV (σ / avg)</p></div>'
+                f'<div style="flex:1;min-width:110px;background:#1E2D42;border:1px solid #2D4A6B;border-top:2px solid {h100_col};border-radius:8px;padding:11px 13px">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Hours &gt; €100</p>'
+                f'<p style="margin:5px 0 0;font-size:21px;font-weight:700;color:{h100_col};font-family:JetBrains Mono,monospace">{pct_above_100:.0f}%</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">of DA hours</p></div>'
+                f'</div>'
+            )
+            if dam_peak is not None and dam_offpk is not None:
+                dam_kpi_html += (
+                    f'<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">'
+                    f'<div style="flex:1;min-width:140px;background:#1E2D42;border:1px solid #2D4A6B;border-left:3px solid #7c3aed;border-radius:8px;padding:10px 13px">'
+                    f'<p style="margin:0;font-size:9px;font-weight:600;color:#7c3aed;text-transform:uppercase;letter-spacing:0.1em">Peak Hours Avg &nbsp;·&nbsp; 08:00–20:00 UTC</p>'
+                    f'<p style="margin:4px 0 0;font-size:20px;font-weight:700;color:#E6EDF3;font-family:JetBrains Mono,monospace">€{dam_peak:.2f}/MWh</p>'
+                    f'</div>'
+                    f'<div style="flex:1;min-width:140px;background:#1E2D42;border:1px solid #2D4A6B;border-left:3px solid #444D56;border-radius:8px;padding:10px 13px">'
+                    f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Off-Peak Hours Avg &nbsp;·&nbsp; 20:00–08:00 UTC</p>'
+                    f'<p style="margin:4px 0 0;font-size:20px;font-weight:700;color:#E6EDF3;font-family:JetBrains Mono,monospace">€{dam_offpk:.2f}/MWh</p>'
+                    f'</div>'
+                    f'<div style="flex:0.6;min-width:120px;background:#1E2D42;border:1px solid #2D4A6B;border-left:3px solid {pk_col};border-radius:8px;padding:10px 13px">'
+                    f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Peak Premium</p>'
+                    f'<p style="margin:4px 0 0;font-size:20px;font-weight:700;color:{pk_col};font-family:JetBrains Mono,monospace">{pk_premium:+.1f}%</p>'
+                    f'<p style="margin:2px 0 0;font-size:10px;color:#8B949E">over off-peak &nbsp;·&nbsp; {pct_below_50:.0f}% of DA hours below €50</p>'
+                    f'</div>'
+                    f'</div>'
+                    f'<p style="margin:0 0 18px;font-size:10px;color:#444D56;font-style:italic">Peak/off-peak split based on 08:00–20:00 UTC. Peak premium reflects the shaped value vs flat-rate assumptions — relevant for PPA structuring (flat vs shaped/load-following contracts). High CV indicates wide intraday price swings; assets with flexible dispatch can capture more of the peak-hour premium.</p>'
+                )
+            st.markdown(dam_kpi_html, unsafe_allow_html=True)
 
 
 # ════════════════════════════════════════════════════════════════════════════

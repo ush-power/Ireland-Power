@@ -295,19 +295,48 @@ _EIRGRID_HEADERS = {
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_eirgrid(start: str, end: str) -> pd.DataFrame:
-    """Fetch EirGrid generation mix data (wind, total generation, demand,
-    CO2 intensity, interconnection) for the given date range (YYYY-MM-DD).
-    Returns a DataFrame indexed by UTC timestamp with 15-min resolution,
-    then resampled to hourly for display.
-    Returns empty DataFrame on failure."""
+    """Fetch EirGrid generation mix data for the given date range (YYYY-MM-DD).
+    Retries on 503. Derives CO2 intensity and wind penetration from available
+    endpoints when direct feeds are throttled. Returns empty DataFrame on failure."""
+    import time as _time
+    from io import StringIO
     from datetime import datetime as _dt
+
     try:
-        s = _dt.strptime(start, "%Y-%m-%d")
-        e = _dt.strptime(end,   "%Y-%m-%d")
-        datefrom = s.strftime("%d-%b-%Y")
-        dateto   = e.strftime("%d-%b-%Y")
+        datefrom = _dt.strptime(start, "%Y-%m-%d").strftime("%d-%b-%Y")
+        dateto   = _dt.strptime(end,   "%Y-%m-%d").strftime("%d-%b-%Y")
     except Exception:
         return pd.DataFrame()
+
+    def _fetch_area(area, col_names, retries=3):
+        url = (f"{_EIRGRID_BASE}?area={area}&region=ROI"
+               f"&datefrom={datefrom}&dateto={dateto}")
+        for attempt in range(retries):
+            try:
+                r = requests.get(url, headers=_EIRGRID_HEADERS, timeout=20)
+                if r.status_code == 503:
+                    _time.sleep(1.5 * (attempt + 1))
+                    continue
+                r.raise_for_status()
+                text = r.text.strip()
+                if not text or text == "Invalid Operation":
+                    return None
+                raw = pd.read_csv(StringIO(text))
+                raw.columns = [c.strip() for c in raw.columns]
+                time_col = raw.columns[0]
+                raw["ts"] = pd.to_datetime(raw[time_col], format="%d %B %Y %H:%M",
+                                           errors="coerce")
+                raw = raw.dropna(subset=["ts"]).set_index("ts")
+                numeric_cols = [c for c in raw.columns if c not in (time_col, "REGION")]
+                for i, nc in enumerate(numeric_cols):
+                    if i < len(col_names):
+                        raw = raw.rename(columns={nc: col_names[i]})
+                keep = [cn for cn in col_names if cn in raw.columns]
+                if keep:
+                    return raw[keep].apply(pd.to_numeric, errors="coerce")
+            except Exception:
+                pass
+        return None
 
     areas = {
         "generationactual": ["Generation_MW"],
@@ -320,37 +349,24 @@ def fetch_eirgrid(start: str, end: str) -> pd.DataFrame:
 
     frames = {}
     for area, col_names in areas.items():
-        try:
-            url = (f"{_EIRGRID_BASE}?area={area}&region=ROI"
-                   f"&datefrom={datefrom}&dateto={dateto}")
-            req = requests.get(url, headers=_EIRGRID_HEADERS, timeout=20)
-            req.raise_for_status()
-            text = req.text.strip()
-            if not text or text == "Invalid Operation":
-                continue
-            from io import StringIO
-            raw = pd.read_csv(StringIO(text))
-            raw.columns = [c.strip() for c in raw.columns]
-            time_col = raw.columns[0]
-            raw["ts"] = pd.to_datetime(raw[time_col], format="%d %B %Y %H:%M",
-                                       errors="coerce")
-            raw = raw.dropna(subset=["ts"]).set_index("ts")
-            # Keep numeric columns only, renaming to friendly names
-            numeric_cols = [c for c in raw.columns if c != time_col and c != "REGION"]
-            for i, nc in enumerate(numeric_cols):
-                if i < len(col_names):
-                    raw = raw.rename(columns={nc: col_names[i]})
-            keep = [cn for cn in col_names if cn in raw.columns]
-            if keep:
-                frames[area] = raw[keep].apply(pd.to_numeric, errors="coerce")
-        except Exception:
-            continue
+        result = _fetch_area(area, col_names)
+        if result is not None:
+            frames[area] = result
 
     if not frames:
         return pd.DataFrame()
 
     combined = pd.concat(frames.values(), axis=1)
     combined = combined.resample("1h").mean()
+
+    # Derive CO2 intensity (gCO2/kWh) from emissions + generation when direct
+    # feed is unavailable (co2emission tCO2/hr ÷ Generation MW = tCO2/MWh × 1000)
+    if "CO2_Intensity" not in combined.columns:
+        if "CO2_Emission" in combined.columns and "Generation_MW" in combined.columns:
+            combined["CO2_Intensity"] = (
+                combined["CO2_Emission"] / combined["Generation_MW"] * 1000
+            ).clip(lower=0)
+
     combined.index.name = "Timestamp"
     return combined.reset_index()
 

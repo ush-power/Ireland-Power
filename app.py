@@ -1558,6 +1558,206 @@ with tab2:
             tfig.update_layout(**layout_t)
             st.plotly_chart(tfig, use_container_width=True, config={"displayModeBar": False})
 
+            # ── DAM Price Range Analysis ──
+            st.markdown(
+                '<p style="margin:18px 0 10px;font-size:10px;font-weight:600;color:#8B949E;'
+                'text-transform:uppercase;letter-spacing:0.1em">Day Ahead Market — Price Range Analysis</p>',
+                unsafe_allow_html=True,
+            )
+
+            dam_prices  = dam_h["Price"].dropna()
+            p10_d = float(dam_prices.quantile(0.10))
+            p25_d = float(dam_prices.quantile(0.25))
+            p50_d = float(dam_prices.quantile(0.50))
+            p75_d = float(dam_prices.quantile(0.75))
+            p90_d = float(dam_prices.quantile(0.90))
+            iqr_d = p75_d - p25_d
+
+            st.markdown(
+                f'<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">'
+                f'<div style="flex:1;min-width:100px;background:#141F2E;border:1px solid #2D4A6B;border-top:2px solid #FF4B4B;border-radius:8px;padding:10px 12px;text-align:center">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">P10</p>'
+                f'<p style="margin:4px 0 0;font-size:18px;font-weight:700;color:#FF4B4B;font-family:JetBrains Mono,monospace">€{p10_d:.2f}</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;color:#555D68">10th pctile</p></div>'
+                f'<div style="flex:1;min-width:100px;background:#141F2E;border:1px solid #2D4A6B;border-top:2px solid #F59E0B;border-radius:8px;padding:10px 12px;text-align:center">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">P25</p>'
+                f'<p style="margin:4px 0 0;font-size:18px;font-weight:700;color:#F59E0B;font-family:JetBrains Mono,monospace">€{p25_d:.2f}</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;color:#555D68">Lower quartile</p></div>'
+                f'<div style="flex:1;min-width:100px;background:#141F2E;border:1px solid #2D4A6B;border-top:2px solid #00D4FF;border-radius:8px;padding:10px 12px;text-align:center">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Median (P50)</p>'
+                f'<p style="margin:4px 0 0;font-size:18px;font-weight:700;color:#00D4FF;font-family:JetBrains Mono,monospace">€{p50_d:.2f}</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;color:#555D68">Midpoint</p></div>'
+                f'<div style="flex:1;min-width:100px;background:#141F2E;border:1px solid #2D4A6B;border-top:2px solid #F59E0B;border-radius:8px;padding:10px 12px;text-align:center">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">P75</p>'
+                f'<p style="margin:4px 0 0;font-size:18px;font-weight:700;color:#F59E0B;font-family:JetBrains Mono,monospace">€{p75_d:.2f}</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;color:#555D68">Upper quartile</p></div>'
+                f'<div style="flex:1;min-width:100px;background:#141F2E;border:1px solid #2D4A6B;border-top:2px solid #00CC33;border-radius:8px;padding:10px 12px;text-align:center">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">P90</p>'
+                f'<p style="margin:4px 0 0;font-size:18px;font-weight:700;color:#00CC33;font-family:JetBrains Mono,monospace">€{p90_d:.2f}</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;color:#555D68">90th pctile</p></div>'
+                f'<div style="flex:1;min-width:100px;background:#141F2E;border:1px solid #2D4A6B;border-top:2px solid #7c3aed;border-radius:8px;padding:10px 12px;text-align:center">'
+                f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">IQR (P25–P75)</p>'
+                f'<p style="margin:4px 0 0;font-size:18px;font-weight:700;color:#7c3aed;font-family:JetBrains Mono,monospace">€{iqr_d:.2f}</p>'
+                f'<p style="margin:2px 0 0;font-size:10px;color:#555D68">Interquartile</p></div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            # Distribution histogram  |  Daily spread bar chart
+            rcol1, rcol2 = st.columns(2)
+
+            with rcol1:
+                dist_fig = go.Figure()
+                dist_fig.add_trace(go.Histogram(
+                    x=dam_prices, nbinsx=40, name="Price Frequency",
+                    marker_color="#7c3aed",
+                    marker_line=dict(color="#3D2A6B", width=0.5),
+                    opacity=0.85,
+                    hovertemplate="€%{x:.0f}/MWh<br>Count: %{y}<extra></extra>",
+                ))
+                for pv, pl, pc in [(p10_d, "P10", "#FF4B4B"), (p50_d, "P50", "#00D4FF"), (p90_d, "P90", "#00CC33")]:
+                    dist_fig.add_vline(x=pv, line_width=1.5, line_dash="dash", line_color=pc,
+                                       annotation_text=pl,
+                                       annotation_font=dict(color=pc, size=9))
+                lay_dist = dark_layout("PRICE DISTRIBUTION  ·  FREQUENCY HISTOGRAM", height=300)
+                lay_dist["xaxis"]["title"] = dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))
+                lay_dist["yaxis"]["title"] = dict(text="Count", font=dict(size=10, color="#8B949E"))
+                dist_fig.update_layout(**lay_dist)
+                st.plotly_chart(dist_fig, use_container_width=True, config={"displayModeBar": False})
+                st.markdown(
+                    '<p style="margin:0 0 10px;font-size:10px;color:#444D56;font-style:italic">'
+                    'Histogram of all half-hourly DAM prices. Dashed lines mark P10 (red), median (cyan), P90 (green). '
+                    'A tall narrow distribution indicates a stable price environment; a wide spread signals high range exposure.</p>',
+                    unsafe_allow_html=True,
+                )
+
+            with rcol2:
+                dam_da["Spread"] = dam_da["High"] - dam_da["Low"]
+                roll_spread = dam_da["Spread"].rolling(7, min_periods=1).mean()
+                spread_med  = float(dam_da["Spread"].median())
+                s_colors = [
+                    "#FF4B4B" if s > spread_med * 1.5 else
+                    "#F59E0B" if s > spread_med else
+                    "#7c3aed"
+                    for s in dam_da["Spread"]
+                ]
+                sfig = go.Figure()
+                sfig.add_trace(go.Bar(
+                    x=dam_da["Date"], y=dam_da["Spread"],
+                    name="Daily Spread", marker_color=s_colors,
+                    hovertemplate="<b>%{x|%d %b}</b><br>Spread €%{y:.2f}/MWh<extra></extra>",
+                ))
+                sfig.add_trace(go.Scatter(
+                    x=dam_da["Date"], y=roll_spread,
+                    mode="lines", name="7-Day Avg Spread",
+                    line=dict(color="#00D4FF", width=2),
+                    hovertemplate="<b>%{x|%d %b}</b><br>7d Avg €%{y:.2f}<extra></extra>",
+                ))
+                sfig.add_hline(y=spread_med, line_width=1, line_dash="dash", line_color="#444D56",
+                               annotation_text=f"Median €{spread_med:.2f}",
+                               annotation_font=dict(color="#8B949E", size=9))
+                lay_s = dark_layout("DAILY SPREAD  ·  HIGH − LOW RANGE PER DAY", height=300)
+                lay_s["xaxis"]["title"] = dict(text="Date", font=dict(size=10, color="#8B949E"))
+                lay_s["yaxis"]["title"] = dict(text="Spread €/MWh", font=dict(size=10, color="#8B949E"))
+                sfig.update_layout(**lay_s)
+                st.plotly_chart(sfig, use_container_width=True, config={"displayModeBar": False})
+                st.markdown(
+                    '<p style="margin:0 0 10px;font-size:10px;color:#444D56;font-style:italic">'
+                    'Each bar = daily high minus low. Red bars = spread >1.5× median (wide-range days). '
+                    'Cyan line = 7-day rolling average spread.</p>',
+                    unsafe_allow_html=True,
+                )
+
+            # Average hourly price profile (0-23)
+            dam_h_hr = dam_h.copy()
+            dam_h_hr["Hour"] = dam_h_hr["StartTime"].dt.hour
+            hr_prof = (
+                dam_h_hr.groupby("Hour")["Price"]
+                .agg(Avg="mean", High="max", Low="min",
+                     P10=lambda x: x.quantile(0.1),
+                     P90=lambda x: x.quantile(0.9))
+                .reset_index()
+            )
+            hr_peak_idx  = int(hr_prof["Avg"].idxmax())
+            hr_cheap_idx = int(hr_prof["Avg"].idxmin())
+            hr_peak_h    = int(hr_prof.loc[hr_peak_idx, "Hour"])
+            hr_cheap_h   = int(hr_prof.loc[hr_cheap_idx, "Hour"])
+            hr_overall   = float(hr_prof["Avg"].mean())
+            hr_premium   = float(hr_prof.loc[hr_peak_idx, "Avg"]) - hr_overall
+
+            bar_colors_hr = [
+                "#FF4B4B" if h == hr_peak_h else
+                "#00CC33" if h == hr_cheap_h else
+                "#7c3aed"
+                for h in hr_prof["Hour"]
+            ]
+            hpfig = go.Figure()
+            hpfig.add_trace(go.Scatter(
+                x=pd.concat([hr_prof["Hour"], hr_prof["Hour"].iloc[::-1]]),
+                y=pd.concat([hr_prof["P90"], hr_prof["P10"].iloc[::-1]]),
+                fill="toself", fillcolor="rgba(124,58,237,0.12)",
+                line=dict(color="rgba(0,0,0,0)"),
+                name="P10–P90 Range", hoverinfo="skip",
+            ))
+            hpfig.add_trace(go.Bar(
+                x=hr_prof["Hour"], y=hr_prof["Avg"],
+                name="Hourly Avg", marker_color=bar_colors_hr, opacity=0.85,
+                hovertemplate="<b>%{x:02d}:00</b><br>Avg €%{y:.2f}/MWh<extra></extra>",
+            ))
+            hpfig.add_hline(y=hr_overall, line_width=1, line_dash="dash", line_color="#444D56",
+                            annotation_text=f"Overall Avg €{hr_overall:.2f}",
+                            annotation_font=dict(color="#8B949E", size=9))
+            lay_hp = dark_layout(
+                f"AVERAGE HOURLY PRICE PROFILE  ·  Peak {hr_peak_h:02d}:00 (+€{hr_premium:.2f} vs avg)  ·  Cheap {hr_cheap_h:02d}:00  ·  P10–P90 shaded",
+                height=320,
+            )
+            lay_hp["xaxis"].update(
+                title=dict(text="Hour of Day", font=dict(size=10, color="#8B949E")),
+                tickmode="array",
+                tickvals=list(range(0, 24, 2)),
+                ticktext=[f"{h:02d}:00" for h in range(0, 24, 2)],
+                tickangle=-45,
+                tickfont=dict(size=9, color="#8B949E"),
+            )
+            lay_hp["yaxis"]["title"] = dict(text="EUR/MWh", font=dict(size=10, color="#8B949E"))
+            hpfig.update_layout(**lay_hp)
+            st.plotly_chart(hpfig, use_container_width=True, config={"displayModeBar": False})
+            st.markdown(
+                f'<p style="margin:0 0 10px;font-size:10px;color:#444D56;font-style:italic">'
+                f'Average DAM price by hour of day across the selected period. '
+                f'Red = peak hour ({hr_peak_h:02d}:00); green = cheapest hour ({hr_cheap_h:02d}:00). '
+                f'Purple shading = P10–P90 range showing price variability at each hour.</p>',
+                unsafe_allow_html=True,
+            )
+
+            # Price zone breakdown
+            total_pts  = len(dam_prices)
+            buckets = [
+                ("Negative  (<€0)",   int((dam_prices < 0).sum()),                                          "#FF4B4B"),
+                ("Low  (€0–50)",      int(((dam_prices >= 0)   & (dam_prices < 50)).sum()),                 "#00CC33"),
+                ("Mid  (€50–100)",    int(((dam_prices >= 50)  & (dam_prices < 100)).sum()),                "#F59E0B"),
+                ("High  (€100–200)",  int(((dam_prices >= 100) & (dam_prices < 200)).sum()),                "#FF8C00"),
+                ("Spike  (>€200)",    int((dam_prices >= 200).sum()),                                       "#FF4B4B"),
+            ]
+            bucket_html = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px">'
+            for lbl, cnt, col in buckets:
+                pct = cnt / total_pts * 100 if total_pts > 0 else 0
+                bucket_html += (
+                    f'<div style="flex:1;min-width:120px;background:#141F2E;border:1px solid #2D4A6B;'
+                    f'border-left:3px solid {col};border-radius:8px;padding:10px 12px">'
+                    f'<p style="margin:0;font-size:9px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">{lbl}</p>'
+                    f'<p style="margin:4px 0 0;font-size:20px;font-weight:700;color:{col};font-family:JetBrains Mono,monospace">{pct:.1f}%</p>'
+                    f'<p style="margin:2px 0 0;font-size:10px;color:#555D68">{cnt:,} of {total_pts:,} periods</p>'
+                    f'</div>'
+                )
+            bucket_html += '</div>'
+            st.markdown(
+                '<p style="margin:18px 0 8px;font-size:10px;font-weight:600;color:#8B949E;'
+                'text-transform:uppercase;letter-spacing:0.1em">Price Zone Breakdown</p>'
+                + bucket_html,
+                unsafe_allow_html=True,
+            )
+
             # DAM hour × day heatmap
             dam_tr["Hour"] = dam_tr["StartTime"].dt.hour
             dam_tr["Day"]  = dam_tr["StartTime"].dt.strftime("%d %b")

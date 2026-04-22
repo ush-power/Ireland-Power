@@ -4,8 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import date, timedelta, datetime, timezone
-from google.oauth2 import service_account
-from google.cloud import bigquery
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import base64, os, re, requests
 import xml.etree.ElementTree as ET
 
@@ -189,39 +188,78 @@ hr { border-color: #2D4A6B !important; margin: 0.75rem 0 !important; }
 
 
 # ============================================================================
-# BIGQUERY
-# ============================================================================
-@st.cache_resource
-def get_bq_client():
-    try:
-        credentials = service_account.Credentials.from_service_account_info(
-            st.secrets["gcp_service_account"],
-            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        )
-        return bigquery.Client(credentials=credentials, project="semo-price-automation")
-    except Exception:
-        return None
-
-
-# ============================================================================
 # DATA FETCHING
 # ============================================================================
+def _fetch_semo_xml(url: str, session: requests.Session):
+    try:
+        r = session.get(url, timeout=15)
+        if r.status_code == 200 and len(r.text) > 200:
+            return r.text
+    except Exception:
+        pass
+    return None
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_imbalance(start: str, end: str) -> pd.DataFrame:
-    client = get_bq_client()
-    if client is None:
-        return pd.DataFrame(columns=["StartTime", "ImbalancePrice", "NetImbalanceVolume"])
-    query = f"""
-        SELECT StartTime,
-               CAST(ImbalancePrice     AS FLOAT64) AS ImbalancePrice,
-               CAST(NetImbalanceVolume AS FLOAT64) AS NetImbalanceVolume
-        FROM `semo-price-automation.semo_data.imbalance_prices_5min`
-        WHERE DATE(TradeDate) BETWEEN '{start}' AND '{end}'
-        ORDER BY StartTime
-    """
-    df = client.query(query).to_dataframe()
-    df["StartTime"] = pd.to_datetime(df["StartTime"])
-    return df
+    empty = pd.DataFrame(columns=["StartTime", "ImbalancePrice", "NetImbalanceVolume"])
+    try:
+        base_url = "https://reports.sem-o.com/documents/"
+        time_codes = [
+            f"{h:02d}{m:02d}"
+            for h in range(24)
+            for m in [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]
+        ]
+
+        start_dt = datetime.strptime(start, "%Y-%m-%d")
+        end_dt   = datetime.strptime(end,   "%Y-%m-%d")
+
+        urls = []
+        cur = start_dt
+        while cur <= end_dt:
+            date_nodash = cur.strftime("%Y%m%d")
+            for code in time_codes:
+                urls.append(f"{base_url}PUB_5MinImbalPrc_{date_nodash}{code}.xml")
+            cur += timedelta(days=1)
+
+        session = requests.Session()
+        records = []
+
+        def fetch_one(url):
+            return _fetch_semo_xml(url, session)
+
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            futures = {pool.submit(fetch_one, u): u for u in urls}
+            for fut in as_completed(futures):
+                xml_text = fut.result()
+                if xml_text:
+                    try:
+                        import xml.etree.ElementTree as ET
+                        root = ET.fromstring(xml_text)
+                        for elem in root:
+                            records.append(elem.attrib.copy())
+                    except Exception:
+                        pass
+
+        if not records:
+            return empty
+
+        df = pd.DataFrame(records)
+        if "StartTime" not in df.columns:
+            return empty
+
+        df["StartTime"] = pd.to_datetime(df["StartTime"], errors="coerce")
+        for col in ["ImbalancePrice", "NetImbalanceVolume"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            else:
+                df[col] = float("nan")
+
+        df = df[["StartTime", "ImbalancePrice", "NetImbalanceVolume"]]
+        df = df.dropna(subset=["StartTime"]).drop_duplicates("StartTime").sort_values("StartTime")
+        return df.reset_index(drop=True)
+    except Exception:
+        return empty
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
